@@ -1,0 +1,180 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    name: Contracts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Verify required project facts
+        shell: bash
+        run: |
+          set -euo pipefail
+          required_files=(
+            AGENTS.md
+            README.md
+            hardware/AGENTS.md
+            hardware/README.md
+            backend/AGENTS.md
+            backend/README.md
+            client-kmp/AGENTS.md
+            client-kmp/README.md
+            client-wx-native/AGENTS.md
+            client-wx-native/README.md
+            docs/implementation-plan.md
+            docs/device-protocol.md
+            docs/api/openapi.yaml
+          )
+          for file in "${required_files[@]}"; do
+            test -s "$file"
+          done
+
+      - name: Parse OpenAPI YAML
+        run: >-
+          ruby -e 'require "yaml";
+          doc = YAML.safe_load_file("docs/api/openapi.yaml", aliases: true);
+          abort "OpenAPI paths missing" unless doc["paths"].is_a?(Hash) && !doc["paths"].empty?'
+
+      - name: Reject whitespace errors
+        run: git diff --check HEAD^
+
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+          cache: false
+
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+
+      - name: Run vet
+        run: go vet ./...
+
+      - name: Run tests with race detector
+        run: go test -race ./...
+
+  hardware:
+    name: Hardware
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Arm GNU Toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gcc-arm-none-eabi cmake make
+
+      - name: Configure firmware
+        run: |
+          cmake -S hardware -B out/hardware-debug -G "Unix Makefiles" \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/hardware/cmake/arm-none-eabi-gcc.cmake" \
+            -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build firmware
+        run: cmake --build out/hardware-debug --parallel 2
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: stm32-debug-firmware
+          path: |
+            out/hardware-debug/STM32_Project1.elf
+            out/hardware-debug/STM32_Project1.hex
+            out/hardware-debug/STM32_Project1.bin
+            out/hardware-debug/STM32_Project1.map
+          if-no-files-found: error
+          retention-days: 14
+
+  kmp-android:
+    name: KMP Android
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK platform
+        run: sdkmanager "platforms;android-37" "build-tools;37.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Test shared logic and build Android debug APK
+        working-directory: client-kmp
+        run: ./gradlew :shared:testAndroidHostTest :androidApp:assembleDebug --no-daemon
+
+      - name: Upload Android debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kmp-android-debug-apk
+          path: client-kmp/androidApp/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  wechat-native:
+    name: WeChat Native
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client-wx-native
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            node --check "$file"
+          done < <(find . -type f -name '*.js' -print0)
+
+      - name: Validate JSON files
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$file"
+          done < <(find . -type f -name '*.json' -print0)

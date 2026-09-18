@@ -35,3 +35,12 @@
 8. 跨模块 API/协议变更必须请求受影响模块负责人审核。不得未经审核直接合并到 `main`。
 9. 审核意见处理完成、必需检查通过且获得批准后方可合并；合并后删除远程功能分支，并在 Multica issue 中同步结果和最终 commit/PR。
 10. 紧急修复同样使用 `fix/...` 分支和 PR，不以紧急为由跳过审计；确需特殊处理时必须在 PR 和 Multica 中记录原因。
+
+## Protected Main Branch
+
+- 严禁任何成员或 Agent 直接在 `main` 上编辑、提交或推送；管理员也不例外。
+- 开始任何修改前必须确认当前不在 `main`，并从最新 `origin/main` 创建符合命名规范的分支。
+- `main` 只接受经过 Pull Request、至少一名其他成员批准、全部必需 CI 检查通过且讨论已解决的合并。
+- 禁止 force push、删除 `main`、绕过保护规则或通过管理员权限直接提交。
+- 必需检查的稳定名称为：`Contracts`、`Backend`、`Hardware`、`KMP Android`、`WeChat Native`。修改这些 job 名称前必须同步更新 GitHub 分支保护规则。
+- CI 配置、CODEOWNERS 和分支保护相关修改本身也必须通过独立分支与 PR。
