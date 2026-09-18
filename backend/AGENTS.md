@@ -12,3 +12,13 @@
 - 当前路由 Handler 返回明确的 `501 not_implemented` 是有意的契约占位，不得伪造数据库或 Broker 结果。
 - 负责 Backend 的成员/Agent 必须依照根规则使用 `multica` CLI，同步路由/Schema 变更、MQTT 与数据库决策、测试结果和跨模块依赖。
 - Backend 修改遵守根 Git/PR 流程，分支使用 `feat/backend-...`、`fix/backend-...` 等完整名称；API 或 MQTT Schema PR 必须同步契约文档并请求客户端/硬件负责人审核。
+
+## Documentation, Comments, and Tests
+
+- 导出的 Go 标识符必须有符合 GoDoc 规范的注释；注释以标识符开头并描述契约、并发安全性、单位、错误和副作用，而不是复述实现。
+- 每条 HTTP 路由必须同时更新 `docs/api.md` 与根目录 `../docs/api/openapi.yaml`；MQTT Payload 变化还必须更新 `../docs/device-protocol.md`。
+- Handler、校验、复合预警、设备在线判定和命令状态机必须有表驱动单元测试，覆盖正常、边界、非法、重复、乱序、超时与失败路径。
+- HTTP 使用 `httptest` 做路由/序列化集成测试；MQTT 与数据库接入后必须使用可重复的 Broker/数据库测试环境验证消费、持久化、事务、重连和幂等。
+- 必须执行 `go test -race -coverprofile=coverage.out ./...`。可测试 Backend 包总行覆盖率至少 80%，新增/修改核心逻辑目标至少 90%，复合预警和权限/控制关键分支必须全部覆盖。
+- 不得为了覆盖率直接测试私有实现细节；优先通过公开行为、接口边界和稳定输出断言。
+- PR 必须列出 `go fmt`、`go vet`、race test、覆盖率和集成测试结果。接口文档与实现不一致时禁止合并。

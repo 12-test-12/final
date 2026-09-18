@@ -17,3 +17,7 @@ hardware/build/
 hardware/STM32_Project1/Objects/
 hardware/STM32_Project1/Listings/
 hardware/Esp8266/esp8266_config.local.h
+
+# Test coverage output
+coverage.out
+**/coverage.out

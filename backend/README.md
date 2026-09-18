@@ -21,8 +21,11 @@ curl http://localhost:8080/healthz
 ```sh
 go fmt ./...
 go vet ./...
-go test ./...
+go test -race -coverprofile=coverage.out ./...
+go tool cover -func=coverage.out
 ```
+
+CI 要求 Backend 可测试代码总行覆盖率不低于 80%；新增或修改的核心逻辑目标不低于 90%。覆盖率文件 `coverage.out` 是本地/CI 生成物，不应提交。
 
 `go.mod` 暂时使用 `final/backend` 作为 module path。当前目录不属于可识别的 Git 仓库，无法可靠推导远程仓库路径；确定代码托管地址后应更新该值。
 
@@ -32,6 +35,7 @@ go test ./...
 - Backend 是客户端与设备之间的系统边界。
 - 后续底层 C 能力必须经清晰边界接入，业务代码不得直接依赖具体硬件实现。
 - API 草案见 `../docs/api/openapi.yaml`，设备协议草案见 `../docs/device-protocol.md`，二者尚未冻结。
+- 面向开发者的详细路由、请求/响应示例、错误和实时事件说明见 [`docs/api.md`](docs/api.md)。OpenAPI 仍是机器可读契约事实源，两者必须同步维护。
 
 ## Route Skeleton
 

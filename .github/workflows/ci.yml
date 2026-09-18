@@ -78,8 +78,22 @@ jobs:
       - name: Run vet
         run: go vet ./...
 
-      - name: Run tests with race detector
-        run: go test -race ./...
+      - name: Run tests with race detector and coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -race -coverprofile=coverage.out ./...
+          coverage="$(go tool cover -func=coverage.out | awk '/^total:/ {gsub(/%/, "", $3); print $3}')"
+          echo "Backend coverage: ${coverage}%" | tee -a "$GITHUB_STEP_SUMMARY"
+          awk -v coverage="$coverage" 'BEGIN { if ((coverage + 0) < 80) exit 1 }'
+
+      - name: Upload Backend coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage.out
+          if-no-files-found: error
+          retention-days: 14
 
   hardware:
     name: Hardware
