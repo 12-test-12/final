@@ -50,3 +50,13 @@ func TestRouteRejectsWrongMethod(t *testing.T) {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusMethodNotAllowed)
 	}
 }
+
+func TestWriteJSONHandlesMarshalFailure(t *testing.T) {
+	response := httptest.NewRecorder()
+
+	writeJSON(response, http.StatusOK, make(chan int))
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusInternalServerError)
+	}
+}

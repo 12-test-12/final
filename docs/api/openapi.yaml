@@ -63,6 +63,8 @@ paths:
         - $ref: '#/components/parameters/From'
         - $ref: '#/components/parameters/To'
         - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Order'
       responses:
         '200':
           description: Telemetry page
@@ -90,6 +92,16 @@ paths:
         - $ref: '#/components/parameters/From'
         - $ref: '#/components/parameters/To'
         - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: state
+          in: query
+          schema:
+            type: string
+            enum: [suspect, fire_warning, acknowledged, recovered]
+        - name: active
+          in: query
+          schema:
+            type: boolean
       responses:
         '200':
           description: Alert event page
@@ -213,6 +225,19 @@ components:
         minimum: 1
         maximum: 1000
         default: 200
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque pagination cursor returned by the previous page
+      schema:
+        type: string
+    Order:
+      name: order
+      in: query
+      schema:
+        type: string
+        enum: [asc, desc]
+        default: asc
   responses:
     BadRequest:
       description: Request validation failed
@@ -252,6 +277,11 @@ components:
               type: string
             message:
               type: string
+            requestId:
+              type: string
+            details:
+              type: object
+              additionalProperties: true
     DeviceStatus:
       type: object
       required: [deviceId, connectivity, alarmState, lastSeenAt]
@@ -266,10 +296,25 @@ components:
           enum: [normal, suspect, fire_warning, acknowledged, recovered]
         buzzerMuted:
           type: boolean
+        localAlarm:
+          type: boolean
+        offlineAfterSeconds:
+          type: integer
+          minimum: 1
         lastSeenAt:
           type: string
           format: date-time
           nullable: true
+        thresholdVersion:
+          type: object
+          properties:
+            desired:
+              type: integer
+              minimum: 1
+            confirmed:
+              type: integer
+              minimum: 1
+              nullable: true
     TelemetryPoint:
       type: object
       required:
@@ -364,6 +409,12 @@ components:
           type: number
           minimum: 1
           maximum: 999
+        updatedAt:
+          type: string
+          format: date-time
+        confirmationState:
+          type: string
+          enum: [confirmed, pending, rejected, timed_out]
     ThresholdUpdate:
       type: object
       required: [temperatureHighC, gasHighPpm]
@@ -393,3 +444,9 @@ components:
         status:
           type: string
           enum: [pending]
+        desiredVersion:
+          type: integer
+          minimum: 1
+        expiresAt:
+          type: string
+          format: date-time

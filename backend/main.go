@@ -8,12 +8,23 @@ import (
 )
 
 func main() {
+	addr := backendAddress()
+	server := newServer(addr)
+
+	log.Printf("backend listening on %s", addr)
+	log.Fatal(server.ListenAndServe())
+}
+
+func backendAddress() string {
 	addr := os.Getenv("BACKEND_ADDR")
 	if addr == "" {
 		addr = ":8080"
 	}
+	return addr
+}
 
-	server := &http.Server{
+func newServer(addr string) *http.Server {
+	return &http.Server{
 		Addr:              addr,
 		Handler:           newRouter(),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -21,7 +32,4 @@ func main() {
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-
-	log.Printf("backend listening on %s", addr)
-	log.Fatal(server.ListenAndServe())
 }
