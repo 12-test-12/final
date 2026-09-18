@@ -1,0 +1,395 @@
+openapi: 3.0.3
+info:
+  title: Smart Lab Environment Monitoring API
+  version: 0.1.0-draft
+  description: >-
+    Contract draft for the Go backend. Except for /healthz, routes currently
+    return 501 until storage, MQTT, alert evaluation, and WebSocket delivery
+    are implemented.
+servers:
+  - url: http://localhost:8080
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      summary: Check process health
+      responses:
+        '200':
+          description: Process is running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /api/v1/devices/{deviceId}/status:
+    get:
+      operationId: getDeviceStatus
+      summary: Get the current device and connectivity state
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: Current device state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceStatus'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+  /api/v1/devices/{deviceId}/telemetry/latest:
+    get:
+      operationId: getLatestTelemetry
+      summary: Get the latest valid telemetry sample
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: Latest sample
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelemetryPoint'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+  /api/v1/devices/{deviceId}/telemetry:
+    get:
+      operationId: listTelemetry
+      summary: Query historical telemetry in ascending event-time order
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Telemetry page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TelemetryPoint'
+                  nextCursor:
+                    type: string
+                    nullable: true
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+  /api/v1/devices/{deviceId}/alerts:
+    get:
+      operationId: listAlerts
+      summary: Query alert events
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Alert event page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AlertEvent'
+                  nextCursor:
+                    type: string
+                    nullable: true
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+  /api/v1/devices/{deviceId}/thresholds:
+    get:
+      operationId: getThresholds
+      summary: Get desired and device-confirmed thresholds
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: Current thresholds
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Thresholds'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+    put:
+      operationId: updateThresholds
+      summary: Validate and enqueue a threshold update
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThresholdUpdate'
+      responses:
+        '202':
+          description: Command accepted; device acknowledgement is pending
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandAccepted'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+  /api/v1/devices/{deviceId}/commands/mute:
+    post:
+      operationId: setDeviceMute
+      summary: Enqueue a buzzer mute or unmute command
+      description: Muting never clears the local alarm or disables LED and telemetry reporting.
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MuteCommand'
+      responses:
+        '202':
+          description: Command accepted; device acknowledgement is pending
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandAccepted'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+  /ws/v1/devices/{deviceId}/telemetry:
+    get:
+      operationId: streamDeviceTelemetry
+      summary: Upgrade to the per-device telemetry WebSocket stream
+      x-websocket: true
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '101':
+          description: WebSocket protocol switched; messages use TelemetryPoint JSON
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+components:
+  parameters:
+    DeviceId:
+      name: deviceId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9_-]{1,32}$'
+      example: MCU001
+    From:
+      name: from
+      in: query
+      description: Inclusive RFC 3339 timestamp
+      schema:
+        type: string
+        format: date-time
+    To:
+      name: to
+      in: query
+      description: Exclusive RFC 3339 timestamp
+      schema:
+        type: string
+        format: date-time
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 200
+  responses:
+    BadRequest:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    NotFound:
+      description: Device or data was not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    NotImplemented:
+      description: Contract exists but implementation is pending
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+  schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+    DeviceStatus:
+      type: object
+      required: [deviceId, connectivity, alarmState, lastSeenAt]
+      properties:
+        deviceId:
+          type: string
+        connectivity:
+          type: string
+          enum: [online, offline, unknown]
+        alarmState:
+          type: string
+          enum: [normal, suspect, fire_warning, acknowledged, recovered]
+        buzzerMuted:
+          type: boolean
+        lastSeenAt:
+          type: string
+          format: date-time
+          nullable: true
+    TelemetryPoint:
+      type: object
+      required:
+        - deviceId
+        - receivedAt
+        - temperatureC
+        - humidityRh
+        - gasAdcRaw
+        - gasAdcFiltered
+        - localAlarm
+      properties:
+        deviceId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+        timestamp:
+          type: string
+          format: date-time
+          nullable: true
+        receivedAt:
+          type: string
+          format: date-time
+        temperatureC:
+          type: number
+          format: float
+        humidityRh:
+          type: number
+          format: float
+        gasAdcRaw:
+          type: integer
+          minimum: 0
+          maximum: 4095
+        gasAdcFiltered:
+          type: integer
+          minimum: 0
+          maximum: 4095
+        gasPpm:
+          type: number
+          format: float
+          nullable: true
+        localAlarm:
+          type: boolean
+        alarmCauses:
+          type: array
+          items:
+            type: string
+        buzzerMuted:
+          type: boolean
+    AlertEvent:
+      type: object
+      required: [id, deviceId, state, startedAt, evidence]
+      properties:
+        id:
+          type: string
+        deviceId:
+          type: string
+        state:
+          type: string
+          enum: [suspect, fire_warning, acknowledged, recovered]
+        startedAt:
+          type: string
+          format: date-time
+        endedAt:
+          type: string
+          format: date-time
+          nullable: true
+        evidence:
+          type: object
+          required: [gasRise, temperatureRateCPerMinute]
+          properties:
+            gasRise:
+              type: number
+            temperatureRateCPerMinute:
+              type: number
+    Thresholds:
+      type: object
+      required: [desiredVersion, temperatureHighC, gasHighPpm]
+      properties:
+        desiredVersion:
+          type: integer
+          minimum: 1
+        confirmedVersion:
+          type: integer
+          minimum: 1
+          nullable: true
+        temperatureHighC:
+          type: number
+          minimum: 0
+          maximum: 80
+        gasHighPpm:
+          type: number
+          minimum: 1
+          maximum: 999
+    ThresholdUpdate:
+      type: object
+      required: [temperatureHighC, gasHighPpm]
+      additionalProperties: false
+      properties:
+        temperatureHighC:
+          type: number
+          minimum: 0
+          maximum: 80
+        gasHighPpm:
+          type: number
+          minimum: 1
+          maximum: 999
+    MuteCommand:
+      type: object
+      required: [muted]
+      additionalProperties: false
+      properties:
+        muted:
+          type: boolean
+    CommandAccepted:
+      type: object
+      required: [requestId, status]
+      properties:
+        requestId:
+          type: string
+        status:
+          type: string
+          enum: [pending]

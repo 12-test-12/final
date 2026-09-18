@@ -1,0 +1,19 @@
+.DS_Store
+.vscode/
+
+# Local and generated KMP/Android artifacts
+client-kmp/.gradle/
+client-kmp/.idea/
+client-kmp/.kotlin/
+client-kmp/**/build/
+client-kmp/local.properties
+client-kmp/iosApp/**/xcuserdata/
+
+# WeChat Developer Tools local settings
+client-wx-native/project.private.config.json
+
+# Generated firmware artifacts
+hardware/build/
+hardware/STM32_Project1/Objects/
+hardware/STM32_Project1/Listings/
+hardware/Esp8266/esp8266_config.local.h
