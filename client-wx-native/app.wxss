@@ -1,10 +1,127 @@
-/**app.wxss**/
-.container {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
+/* ============================================================
+   全局设计系统 · Deep-Glow 仪表盘风
+   底色：深墨绿近黑 / 主色：荧光薄荷青（发光）
+   ============================================================ */
+
+page {
+  /* 设计令牌 */
+  --bg: #07100e;
+  --bg-soft: #0a1613;
+  --card: rgba(255, 255, 255, 0.045);
+  --card-strong: rgba(255, 255, 255, 0.07);
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(61, 240, 201, 0.22);
+  --accent: #3df0c9;
+  --accent-deep: #17b98f;
+  --accent-glow: rgba(61, 240, 201, 0.35);
+  --text: #f2f7f5;
+  --text-2: #8fa6a0;
+  --text-3: #5c716c;
+  --ok: #3df0c9;
+  --warn: #ffc24b;
+  --danger: #ff5c6c;
+  --info: #58c7f3;
+
+  background:
+    radial-gradient(1200rpx 700rpx at 85% -10%, rgba(23, 185, 143, 0.14), transparent 60%),
+    radial-gradient(900rpx 600rpx at -10% 30%, rgba(88, 199, 243, 0.06), transparent 55%),
+    var(--bg);
+  background-attachment: fixed;
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
+  font-size: 28rpx;
+  line-height: 1.6;
+}
+
+/* 通用卡片：玻璃质感 */
+.card {
+  background: linear-gradient(155deg, var(--card-strong) 0%, var(--card) 55%);
+  border: 1rpx solid var(--line);
+  border-radius: 32rpx;
+  padding: 30rpx;
+  margin: 20rpx 28rpx;
+  box-shadow: 0 18rpx 44rpx rgba(0, 0, 0, 0.45), inset 0 1rpx 0 rgba(255, 255, 255, 0.05);
+}
+
+.card-title {
+  font-size: 24rpx;
+  color: var(--text-2);
+  letter-spacing: 2rpx;
+  margin-bottom: 16rpx;
+}
+
+/* 状态标签 */
+.tag {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 200rpx 0;
-  box-sizing: border-box;
-} 
+  padding: 6rpx 20rpx;
+  border-radius: 999rpx;
+  font-size: 22rpx;
+  line-height: 1.5;
+  letter-spacing: 1rpx;
+}
+.tag-green {
+  background: rgba(61, 240, 201, 0.12);
+  color: var(--ok);
+  box-shadow: 0 0 16rpx rgba(61, 240, 201, 0.12);
+}
+.tag-red { background: rgba(255, 92, 108, 0.14); color: var(--danger); }
+.tag-amber { background: rgba(255, 194, 75, 0.13); color: var(--warn); }
+.tag-blue { background: rgba(88, 199, 243, 0.13); color: var(--info); }
+.tag-gray { background: rgba(143, 166, 160, 0.14); color: var(--text-2); }
+
+/* 按钮 */
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 92rpx;
+  border-radius: 28rpx;
+  font-size: 30rpx;
+  font-weight: 600;
+  border: none;
+}
+.btn-primary {
+  background: linear-gradient(135deg, #46f5cf 0%, #17b98f 100%);
+  color: #04211a;
+  box-shadow: 0 10rpx 32rpx var(--accent-glow);
+}
+.btn-primary:active {
+  transform: scale(0.97);
+  box-shadow: 0 4rpx 16rpx var(--accent-glow);
+}
+.btn-outline {
+  background: rgba(61, 240, 201, 0.08);
+  color: var(--accent);
+  border: 1rpx solid rgba(61, 240, 201, 0.4);
+}
+
+/* 通用文字颜色 */
+.value-red { color: var(--danger); }
+.value-green { color: var(--ok); }
+.value-amber { color: var(--warn); }
+
+/* 加载与占位 */
+.hint {
+  color: var(--text-3);
+  font-size: 24rpx;
+  text-align: center;
+  margin: 48rpx 0;
+}
+
+/* 页面大标题 */
+.page-head {
+  margin: 28rpx 32rpx 6rpx;
+}
+.page-head-title {
+  font-size: 44rpx;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 1rpx;
+}
+.page-head-sub {
+  margin-top: 4rpx;
+  font-size: 24rpx;
+  color: var(--text-3);
+  letter-spacing: 1rpx;
+}

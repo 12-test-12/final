@@ -4,16 +4,18 @@
 
 ## Current Status
 
-当前目录包含微信开发者工具生成的示例骨架：应用配置、首页、日志页和工具函数。示例中的登录、头像昵称与日志展示不是本项目正式业务；本轮保留原状，不删除、不扩展，也不据此冻结任何产品设计。
+业务页面开发已启动：包含实时监控（dashboard）、历史趋势（trends）、告警记录（alerts）、阈值设置（settings）四个 tab 页，以及公共网络层（services/）与工具函数（utils/）。底部导航图标位于 assets/icons/。
+
+后端除 `GET /healthz` 外所有路由尚未实现（返回 501）。当前通过 `config/env.js` 的 `useMock` 开关使用本地 Mock 数据（services/mock/），Mock 响应字段与 api 契约一致；后端就绪后将 `useMock` 置为 `false` 即可切换真实接口，页面代码无需改动。原示例页（index/logs）已移除。
 
 ## Project Boundary
 
 - 后续与 KMP 客户端实现相同业务能力，并使用相同 Backend API、硬件数据源和验收场景。
 - 保持微信原生工程方式和真实开发成本，不为了匹配 KMP 目录结构而人为改造。
 - 不依赖 `client-kmp` 的内部实现；跨客户端只共享已确认的外部契约和需求事实。
-- 当前阶段不实现页面、网络层或业务逻辑。
+- WebSocket 实时订阅、ECharts 折线图与单元测试在后续阶段补齐。
 
-使用微信开发者工具打开本目录即可检查现有原生小程序骨架。`project.config.json` 中已有项目配置；其中 AppID 等环境相关值应由团队确认后再用于正式开发与发布。
+使用微信开发者工具打开本目录即可运行。`project.config.json` 中已有项目配置与团队确认的 AppID；`project.private.config.json` 等本机私有文件不得提交。
 
 ## Collaboration Workflow
 

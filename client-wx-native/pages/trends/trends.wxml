@@ -1,0 +1,81 @@
+<view class="page">
+  <!-- 页头 -->
+  <view class="page-head">
+    <view class="page-head-title">历史趋势</view>
+    <view class="page-head-sub">TRENDS · 指标统计分析</view>
+  </view>
+
+  <!-- 时间范围切换 -->
+  <view class="range-bar">
+    <view
+      wx:for="{{ranges}}"
+      wx:key="*this"
+      class="range-item {{activeIndex === index ? 'range-active' : ''}}"
+      data-index="{{index}}"
+      bindtap="onRangeTap"
+    >{{item}}</view>
+  </view>
+
+  <view class="hint" wx:if="{{loading}}">数据加载中...</view>
+
+  <block wx:if="{{stats}}">
+    <view class="card">
+      <view class="stat-title">温度（°C）</view>
+      <view class="stat-row">
+        <view class="stat-item">
+          <view class="stat-label">最低</view>
+          <view class="stat-value">{{stats.temp.min}}</view>
+        </view>
+        <view class="stat-item">
+          <view class="stat-label">平均</view>
+          <view class="stat-value">{{stats.temp.avg}}</view>
+        </view>
+        <view class="stat-item">
+          <view class="stat-label">最高</view>
+          <view class="stat-value">{{stats.temp.max}}</view>
+        </view>
+      </view>
+    </view>
+
+    <view class="card">
+      <view class="stat-title">湿度（%RH）</view>
+      <view class="stat-row">
+        <view class="stat-item">
+          <view class="stat-label">最低</view>
+          <view class="stat-value">{{stats.hum.min}}</view>
+        </view>
+        <view class="stat-item">
+          <view class="stat-label">平均</view>
+          <view class="stat-value">{{stats.hum.avg}}</view>
+        </view>
+        <view class="stat-item">
+          <view class="stat-label">最高</view>
+          <view class="stat-value">{{stats.hum.max}}</view>
+        </view>
+      </view>
+    </view>
+
+    <view class="card">
+      <view class="stat-title">气体浓度（ppm）</view>
+      <view class="stat-row">
+        <view class="stat-item">
+          <view class="stat-label">最低</view>
+          <view class="stat-value">{{stats.gas.min}}</view>
+        </view>
+        <view class="stat-item">
+          <view class="stat-label">平均</view>
+          <view class="stat-value">{{stats.gas.avg}}</view>
+        </view>
+        <view class="stat-item">
+          <view class="stat-label">最高</view>
+          <view class="stat-value">{{stats.gas.max}}</view>
+        </view>
+      </view>
+    </view>
+
+    <!-- ECharts 图表占位：下一步接入 ec-canvas 三指标折线图 -->
+    <view class="chart-placeholder">
+      <view class="chart-placeholder-text">ECharts 趋势折线图将在下一步接入</view>
+    </view>
+  </block>
+</view>

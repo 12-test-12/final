@@ -1,0 +1,42 @@
+<view class="page">
+  <!-- 页头 -->
+  <view class="page-head">
+    <view class="page-head-title">告警记录</view>
+    <view class="page-head-sub">ALERTS · 早期火情事件</view>
+  </view>
+
+  <view class="hint" wx:if="{{loading}}">数据加载中...</view>
+  <view class="hint" wx:if="{{error}}">{{error}}</view>
+  <view class="hint" wx:if="{{!loading && !error && alerts.length === 0}}">暂无告警记录</view>
+
+  <view class="card alert-card" wx:for="{{alerts}}" wx:key="id">
+    <view class="alert-header">
+      <view class="tag {{item.stateMeta.tag}}">{{item.stateMeta.text}}</view>
+      <view class="alert-time">开始于 {{item.startedText}}</view>
+    </view>
+
+    <view class="evidence">
+      <view class="evidence-row">
+        <text class="evidence-label">气体上升</text>
+        <text class="evidence-value">{{item.evidence.gasRise}} ppm</text>
+      </view>
+      <view class="evidence-row">
+        <text class="evidence-label">触发阈值</text>
+        <text class="evidence-value">{{item.evidence.gasRiseThreshold}} ppm</text>
+      </view>
+      <view class="evidence-row">
+        <text class="evidence-label">温升速率</text>
+        <text class="evidence-value">{{item.evidence.temperatureRateCPerMinute}} °C/min</text>
+      </view>
+      <view class="evidence-row">
+        <text class="evidence-label">样本数</text>
+        <text class="evidence-value">{{item.evidence.sampleCount}}</text>
+      </view>
+    </view>
+
+    <view class="alert-footer" wx:if="{{item.ackText || item.endedText}}">
+      <text wx:if="{{item.ackText}}">确认于 {{item.ackText}}</text>
+      <text wx:if="{{item.endedText}}">结束于 {{item.endedText}}</text>
+    </view>
+  </view>
+</view>
