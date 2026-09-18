@@ -40,10 +40,16 @@ about [Kotlin Multiplatform](https://www.jetbrains.com.cn/en-us/help/kotlin-mult
 
 - `commonMain` 只承载跨平台业务规则、状态转换和可共享模型，不承载 Android 或微信 UI。
 - Android UI 与微信 Host UI 分别由各自平台消费共享逻辑。
-- 后续若增加 `miniappMain`，它只用于微信/JavaScript Runtime 的平台适配，不承载 WXML/WXSS。
+- `miniappMain` 由 Mini App Gradle 插件提供，只用于微信/JavaScript Runtime 的平台适配，不承载 WXML/WXSS。
 - 平台 API 通过接口或 Adapter 隔离；不把共享层演进成自研跨平台 UI Framework。
 
-当前阶段不新增 MiniApp target、不实现业务页面，也不冻结 Backend API。现有 iOS 模板与规划中的 Android/MiniApp 目标存在范围差异，后续应由团队确认是保留为附加目标还是调整；本轮不删除或重构。
+当前已通过 SDK 插件引入 Mini App target，但不实现业务页面，也不冻结 Backend API。现有 iOS 模板作为附加目标保留；本轮不删除或重构。
+
+## Mini App SDK Dependency
+
+`settings.gradle.kts` 通过本地 composite build 分别解析未发布的 Gradle 插件与 runtime 坐标。
+`shared` 应用 `io.github.bobcgn.miniapp` 后，插件会提供 Mini App target，在 `shared/src`
+下创建 `miniappMain/kotlin` 与 `miniappTest/kotlin`，并仅把 runtime SDK 接入 `miniappMain`。
 
 ## Collaboration Workflow
 
