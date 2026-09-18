@@ -143,6 +143,10 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The action's default includes the retired `tools` package, which
+          # makes sdkmanager fail before the KMP build starts.
+          packages: platform-tools
 
       - name: Install Android SDK platform
         run: sdkmanager "platforms;android-37" "build-tools;37.0.0"
