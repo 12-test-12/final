@@ -83,3 +83,17 @@ git push -u origin feat/backend-telemetry-query
 - 示例：`feat/hardware-mqtt-telemetry`、`fix/backend-offline-timeout`、`docs/repo-api-contract`
 
 禁止直接在 `main` 开发或使用 `dev`、`test1`、姓名等含糊分支名。完整约束见 [AGENTS.md](AGENTS.md)。
+
+## CI/CD
+
+GitHub Actions 在所有指向 `main` 的 PR 及 `main` 合并结果上执行：
+
+- `Contracts`：项目事实文件、OpenAPI YAML 和空白错误检查。
+- `Backend`：Go 格式、`vet` 和 race-enabled tests。
+- `Hardware`：Arm GNU Toolchain 交叉编译并上传 ELF/HEX/BIN/MAP。
+- `KMP Android`：共享逻辑测试、Android Debug APK 构建及制品上传。
+- `WeChat Native`：JavaScript 语法与 JSON 校验。
+
+当前 CD 是“持续交付构建制品”而非自动部署：固件和 APK 在 Actions 中保留 14 天。尚未定义生产设备 OTA、应用商店或小程序发布目标，因此流水线不会擅自发布到真实环境。
+
+`main` 是受保护分支，任何人（包括管理员）都不能直接推送、强推或删除。所有修改必须经 PR、至少一次其他成员批准、全部必需检查通过并解决讨论后合并。
