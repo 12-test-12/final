@@ -135,6 +135,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Check out Mini App SDK
+        uses: actions/checkout@v4
+        with:
+          repository: BobcGn/kmp-miniapp-sdk
+          path: kmp-miniapp-sdk
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -156,6 +162,8 @@ jobs:
 
       - name: Test shared logic and build Android debug APK
         working-directory: client-kmp
+        env:
+          KMP_MINIAPP_SDK_PATH: ../kmp-miniapp-sdk
         run: ./gradlew :shared:testAndroidHostTest :androidApp:assembleDebug --no-daemon
 
       - name: Upload Android debug APK
