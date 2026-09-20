@@ -263,6 +263,8 @@ APP001|<temperature>|<humidity>|<gasPpm>
 | FD-9 | Backend 侧 `acknowledged` 告警状态移出首期冻结范围 | 首期没有告警确认接口，保留该状态会形成无法产生的契约；作为二期扩展值记录在 Backend 文档 |
 | FD-10 | 阈值范围 `temperatureHighC` 0–80、`humidityHighRh` 0–100、`gasHighPpm` 1–999 | 与固件 `uint8` 采样能力及 APP001 帧整数取值范围一致，留出余量 |
 | FD-11 | 新增 `GET /api/v1/devices/{deviceId}/commands/{requestId}` | 客户端断线重连后必须能查询命令最终结果，否则 `accepted`/`applied` 无法区分，超时结果不可见 |
+| FD-12 | 复合火情的证据字段使用 `gasAdcRise` / `gasAdcRiseThreshold`（ADC 码），不使用 ppm | 增量是差值，未标定时仍然有效；`gasAdcFiltered` 恒有值而 `gasPpm` 可为 `null`。若用 ppm 表达，未标定设备将无法产生可解释的告警证据 |
+| FD-13 | 实现层不保留 `not_implemented` 错误码 | 首期路由全部实现，保留一个不会被产生的错误码会形成无法验证的契约；实时流未配置改为启动期错误而非运行期响应 |
 
 ## 9. 变更流程
 

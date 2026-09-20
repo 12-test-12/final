@@ -1,12 +1,48 @@
 {
   "pages": [
-    "pages/index/index",
-    "pages/logs/logs"
+    "pages/dashboard/dashboard",
+    "pages/trends/trends",
+    "pages/alerts/alerts",
+    "pages/settings/settings"
   ],
   "window": {
-    "navigationBarTextStyle": "black",
-    "navigationBarTitleText": "Weixin",
-    "navigationBarBackgroundColor": "#ffffff"
+    "navigationBarTextStyle": "white",
+    "navigationBarTitleText": "机房环境监控",
+    "navigationBarBackgroundColor": "#07100e",
+    "backgroundColor": "#07100e",
+    "backgroundTextStyle": "light"
+  },
+  "tabBar": {
+    "color": "#5c716c",
+    "selectedColor": "#3df0c9",
+    "backgroundColor": "#0a1412",
+    "borderStyle": "black",
+    "list": [
+      {
+        "pagePath": "pages/dashboard/dashboard",
+        "text": "监控",
+        "iconPath": "assets/icons/dashboard.png",
+        "selectedIconPath": "assets/icons/dashboard-active.png"
+      },
+      {
+        "pagePath": "pages/trends/trends",
+        "text": "趋势",
+        "iconPath": "assets/icons/trends.png",
+        "selectedIconPath": "assets/icons/trends-active.png"
+      },
+      {
+        "pagePath": "pages/alerts/alerts",
+        "text": "告警",
+        "iconPath": "assets/icons/alerts.png",
+        "selectedIconPath": "assets/icons/alerts-active.png"
+      },
+      {
+        "pagePath": "pages/settings/settings",
+        "text": "设置",
+        "iconPath": "assets/icons/settings.png",
+        "selectedIconPath": "assets/icons/settings-active.png"
+      }
+    ]
   },
   "style": "v2",
   "componentFramework": "glass-easel",

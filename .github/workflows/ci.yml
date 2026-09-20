@@ -59,6 +59,23 @@ jobs:
   backend:
     name: Backend
     runs-on: ubuntu-latest
+    # A disposable CI service, separate from developers' existing postgres-dev.
+    # Without TEST_DATABASE_URL the store integration suite silently skips and
+    # the reported coverage does not include the production persistence path.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: lab_test
+          POSTGRES_PASSWORD: lab_test
+          POSTGRES_DB: lab_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lab_test -d lab_test"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
     defaults:
       run:
         working-directory: backend
@@ -80,6 +97,8 @@ jobs:
 
       - name: Run tests with race detector and coverage
         shell: bash
+        env:
+          TEST_DATABASE_URL: postgres://lab_test:lab_test@localhost:5432/lab_test?sslmode=disable
         run: |
           set -euo pipefail
           go test -race -coverprofile=coverage.out ./...
@@ -116,6 +135,32 @@ jobs:
       - name: Build firmware
         run: cmake --build out/hardware-debug --parallel 2
 
+      # The host suite is introduced by the hardware feature PR. Keep this CI
+      # preparation PR mergeable on its own; once the suite exists it is required.
+      - name: Configure host tests
+        if: hashFiles('hardware/tests/CMakeLists.txt') != ''
+        run: |
+          cmake -S hardware/tests -B out/hardware-host-tests \
+            -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build host tests
+        if: hashFiles('hardware/tests/CMakeLists.txt') != ''
+        run: cmake --build out/hardware-host-tests --parallel 2
+
+      - name: Run host tests
+        if: hashFiles('hardware/tests/CMakeLists.txt') != ''
+        run: ./out/hardware-host-tests/host_tests
+
+      - name: Report core coverage
+        if: hashFiles('hardware/tests/CMakeLists.txt') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S hardware/tests -B out/hardware-coverage -DENABLE_COVERAGE=ON
+          cmake --build out/hardware-coverage --parallel 2
+          ./hardware/scripts/host_coverage.sh out/hardware-coverage \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
@@ -125,6 +170,15 @@ jobs:
             out/hardware-debug/STM32_Project1.hex
             out/hardware-debug/STM32_Project1.bin
             out/hardware-debug/STM32_Project1.map
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload host test coverage
+        if: hashFiles('hardware/tests/CMakeLists.txt') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: hardware-core-coverage
+          path: out/hardware-coverage/host_tests.profdata
           if-no-files-found: error
           retention-days: 14
 

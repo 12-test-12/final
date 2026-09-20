@@ -1,46 +1,19 @@
 package main
 
-import (
-	"testing"
-	"time"
-)
+import "testing"
 
-func TestBackendAddress(t *testing.T) {
-	t.Run("default", func(t *testing.T) {
-		t.Setenv("BACKEND_ADDR", "")
-		if got := backendAddress(); got != ":8080" {
-			t.Fatalf("backendAddress() = %q, want %q", got, ":8080")
-		}
-	})
+// TestRunReturnsConfigurationErrors verifies that a configuration the loader
+// rejects stops the process with an error instead of starting a service with
+// defaults the operator did not choose.
+//
+// The successful path of run blocks until a signal arrives, so it is covered
+// through the composition root in internal/app, where Run is exercisable with a
+// cancellable context.
+func TestRunReturnsConfigurationErrors(t *testing.T) {
+	t.Setenv("AUTH_MODE", "kerberos")
 
-	t.Run("environment override", func(t *testing.T) {
-		t.Setenv("BACKEND_ADDR", "127.0.0.1:18080")
-		if got := backendAddress(); got != "127.0.0.1:18080" {
-			t.Fatalf("backendAddress() = %q, want %q", got, "127.0.0.1:18080")
-		}
-	})
-}
-
-func TestNewServer(t *testing.T) {
-	server := newServer("127.0.0.1:18080")
-
-	if server.Addr != "127.0.0.1:18080" {
-		t.Fatalf("Addr = %q", server.Addr)
+	err := run()
+	if err == nil {
+		t.Fatal("an unsupported authentication mode started the service")
 	}
-	if server.Handler == nil {
-		t.Fatal("Handler is nil")
-	}
-	if server.ReadHeaderTimeout != 5*time.Second {
-		t.Fatalf("ReadHeaderTimeout = %s", server.ReadHeaderTimeout)
-	}
-	if server.ReadTimeout != 10*time.Second {
-		t.Fatalf("ReadTimeout = %s", server.ReadTimeout)
-	}
-	if server.WriteTimeout != 10*time.Second {
-		t.Fatalf("WriteTimeout = %s", server.WriteTimeout)
-	}
-	if server.IdleTimeout != 60*time.Second {
-		t.Fatalf("IdleTimeout = %s", server.IdleTimeout)
-	}
-
 }

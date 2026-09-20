@@ -1,6 +1,8 @@
 # Backend API Detailed Contract
 
-状态：`draft-v1`。本文是 Go Backend 的开发者接口说明；机器可读事实源为 [`../../docs/api/openapi.yaml`](../../docs/api/openapi.yaml)。除 `GET /healthz` 外，当前 Handler 仅注册路由并返回 `501 not_implemented`。
+状态：`v1.0.0`（已冻结，与 [`../../docs/api/openapi.yaml`](../../docs/api/openapi.yaml) 同步）。本文是 Go Backend 的开发者接口说明；机器可读事实源是 OpenAPI 文件。
+
+**当前实现状态**：`/healthz` 与全部 `/api/v1` 路由、`/ws/v1` 实时流均已实现。数据来自 MQTT 接入的设备遥测；未配置 `MQTT_BROKER_URL` 时进程仍可启动，但没有设备数据，控制命令会返回 `503 broker_unavailable`。
 
 ## 1. Conventions
 
@@ -12,41 +14,39 @@ WebSocket: /ws/v1
 Health:    /healthz
 ```
 
-本地默认地址为 `http://localhost:8080`。生产域名、TLS 终止和反向代理尚未确定。
+默认监听 `:8080`，由 `BACKEND_ADDR` 覆盖。生产域名、TLS 终止与反向代理尚未确定。
 
 ### 1.2 Media Type and Encoding
 
-- REST 请求与响应使用 `application/json; charset=utf-8`。
-- 时间使用 UTC RFC 3339，例如 `2026-09-18T11:20:30Z`。
-- MQTT 设备时间使用 Unix 毫秒，进入 Backend 后转换并同时保存 `receivedAt`。
-- 温度单位为摄氏度 `°C`，湿度为 `%RH`，气体 ADC 为 0–4095，估算浓度为 `ppm`。
-- JSON 字段使用 lower camel case。未知请求字段默认拒绝，避免客户端拼写错误被静默忽略。
+- 请求与响应使用 `application/json; charset=utf-8`。
+- 时间使用 UTC RFC 3339，秒精度，例如 `2026-09-24T10:40:30Z`。
+- MQTT 设备时间使用 Unix 毫秒。设备时钟未同步时 `timestamp` 为 `null`，Backend 始终填充 `receivedAt`，并以它作为排序与告警窗口的事件时间。
+- 温度单位 °C，湿度 %RH，气体 ADC 为 0–4095 的 12 位码，估算浓度单位 ppm。
+- JSON 字段使用 lower camel case。**未知请求字段一律拒绝**，避免拼写错误被静默忽略。
 
 ### 1.3 Authentication and Authorization
 
-当前骨架尚未实现鉴权。正式实现前必须确定：
+`AUTH_MODE` 选择鉴权方式：
 
-- 客户端身份认证方式；
-- 用户可访问的设备集合；
-- 查看、静音和修改阈值的独立权限；
-- 控制操作审计日志。
+| Mode | Behavior |
+| --- | --- |
+| `none` | 不校验凭据。仅用于本地开发；启动时记录 WARN。 |
+| `bearer` | 要求 `Authorization: Bearer <token>`，token 在 `AUTH_TOKENS` 中配置。 |
 
-在鉴权完成前，不得将控制类路由暴露到公网。目标请求格式预留：
+`AUTH_TOKENS` 格式为 `token:actor,token:actor`。**actor 是必填的**，它写入控制命令的审计字段；没有 actor 的 token 会导致启动失败。token 比较使用常数时间比较。
 
-```http
-Authorization: Bearer <access-token>
-```
+`AUTH_MODE=none` 时控制类路由对任何能访问端口的人开放，**不得**部署到不可信网络。设备访问范围隔离（哪些用户可访问哪些设备）与查看/静音/改阈值分权尚未实现，属于后续工作。
 
 ### 1.4 Common Headers
 
 | Header | Direction | Required | Meaning |
 | --- | --- | --- | --- |
-| `Authorization` | Request | Production required | Bearer access token |
-| `Content-Type` | Both | JSON body required | `application/json` |
-| `X-Request-ID` | Both | Recommended | Client trace ID or server-generated ID |
-| `Idempotency-Key` | Control request | Required when implemented | Prevent duplicate commands |
+| `Authorization` | Request | `AUTH_MODE=bearer` 时必需 | Bearer access token |
+| `Content-Type` | Both | 有请求体时必需 | `application/json` |
+| `X-Request-ID` | Both | 可选 | 客户端 trace id，回显在错误响应中 |
+| `Idempotency-Key` | 控制请求 | 必需 | 防止重复命令，1–64 字符 |
 
-`Idempotency-Key` 建议使用 UUID/ULID。相同用户、设备、路由和 key 的重复请求必须返回同一命令结果，不能重复向设备发布控制命令。
+缺失 `Idempotency-Key` 返回 `400 invalid_request`。相同设备、相同 key、相同 Payload 的重复请求返回同一命令且**不会再次发布**；相同 key 配不同 Payload 返回 `409 version_conflict`。幂等键按设备隔离，不同设备可以使用同一个 key。
 
 ### 1.5 Device ID
 
@@ -56,7 +56,9 @@ Authorization: Bearer <access-token>
 ^[A-Za-z0-9_-]{1,32}$
 ```
 
-示例：`MCU001`。路径中的 ID 必须与数据库和 MQTT Payload 中的 `deviceId` 一致。
+必须与 MQTT Payload 中的 `deviceId` 一致。该值同时是 MQTT `clientId` 与数据库主键，因此三类事实源中的格式必须相同。
+
+设备在**首次收到合法遥测时自动登记**。在收到第一条有效遥测之前，`GET /status` 返回 `404 device_not_found`。
 
 ### 1.6 Error Envelope
 
@@ -66,78 +68,63 @@ Authorization: Bearer <access-token>
 {
   "error": {
     "code": "invalid_threshold",
-    "message": "gasHighPpm must be between 1 and 999",
+    "message": "domain: invalid threshold: gasHighPpm 5000 outside [1,999]",
     "requestId": "01K5H2YRG92V0V6A3EJ8VQPW03",
     "details": {
-      "field": "gasHighPpm",
-      "minimum": 1,
-      "maximum": 999
+      "field": "gasHighPpm"
     }
   }
 }
 ```
 
-建议错误码：
+`requestId` 仅回显客户端传入的 `X-Request-ID`；服务端不会伪造 trace id。`details` 仅出现在可结构化描述的错误上。
+
+错误码（冻结，与 OpenAPI `ErrorCode` 枚举一致）：
 
 | HTTP | Code | Scenario |
 | --- | --- | --- |
-| 400 | `invalid_request` | JSON、参数或时间范围无效 |
+| 400 | `invalid_request` | JSON、参数、时间范围、游标、缺失 Idempotency-Key |
 | 401 | `unauthenticated` | 缺少或无效凭据 |
-| 403 | `forbidden` | 无设备或控制权限 |
-| 404 | `device_not_found` | 设备不存在或不可见 |
-| 409 | `version_conflict` | 阈值版本或幂等键冲突 |
+| 403 | `forbidden` | 无设备或控制权限（当前无分权模型，保留） |
+| 404 | `device_not_found` | 设备从未上报有效遥测 |
+| 404 | `command_not_found` | 该设备下不存在该 requestId |
+| 409 | `version_conflict` | 幂等键冲突，或阈值版本未前进 |
 | 422 | `invalid_threshold` | 阈值超出设备允许范围 |
-| 429 | `rate_limited` | 查询或控制请求过多 |
+| 429 | `rate_limited` | 实时连接数达到上限 |
 | 500 | `internal_error` | 未预期服务端错误 |
 | 503 | `broker_unavailable` | 控制命令无法发布到 Broker |
-| 504 | `device_ack_timeout` | 等待设备确认超时 |
-
-当前占位实现统一返回：
-
-```json
-{
-  "error": {
-    "code": "not_implemented",
-    "message": "route contract exists; implementation is scheduled for a later phase"
-  }
-}
-```
+| 504 | `device_ack_timeout` | 等待设备确认超时（保留；当前以命令状态 `timed_out` 表达） |
 
 ## 2. Route Summary
 
 | Method | Route | Purpose | Current |
 | --- | --- | --- | --- |
 | GET | `/healthz` | 进程存活检查 | Implemented |
-| GET | `/api/v1/devices/{deviceId}/status` | 设备在线与告警状态 | 501 |
-| GET | `/api/v1/devices/{deviceId}/telemetry/latest` | 最新有效遥测 | 501 |
-| GET | `/api/v1/devices/{deviceId}/telemetry` | 历史遥测分页 | 501 |
-| GET | `/api/v1/devices/{deviceId}/alerts` | 历史告警分页 | 501 |
-| GET | `/api/v1/devices/{deviceId}/thresholds` | 期望与设备确认阈值 | 501 |
-| PUT | `/api/v1/devices/{deviceId}/thresholds` | 校验并下发阈值 | 501 |
-| POST | `/api/v1/devices/{deviceId}/commands/mute` | 静音或恢复蜂鸣器 | 501 |
-| GET | `/ws/v1/devices/{deviceId}/telemetry` | 实时 WebSocket 流 | 501 |
+| GET | `/api/v1/devices/{deviceId}/status` | 设备在线与告警状态 | Implemented |
+| GET | `/api/v1/devices/{deviceId}/telemetry/latest` | 最新有效遥测 | Implemented |
+| GET | `/api/v1/devices/{deviceId}/telemetry` | 历史遥测分页 | Implemented |
+| GET | `/api/v1/devices/{deviceId}/alerts` | 历史告警分页 | Implemented |
+| GET | `/api/v1/devices/{deviceId}/thresholds` | 期望与设备确认阈值 | Implemented |
+| PUT | `/api/v1/devices/{deviceId}/thresholds` | 校验并下发阈值 | Implemented |
+| POST | `/api/v1/devices/{deviceId}/commands/mute` | 静音或恢复蜂鸣器 | Implemented |
+| GET | `/api/v1/devices/{deviceId}/commands/{requestId}` | 查询控制命令状态 | Implemented |
+| GET | `/ws/v1/devices/{deviceId}/telemetry` | 实时 WebSocket 流 | Implemented |
+
+`contract_test.go` 会同时比对路由表与 OpenAPI，任一侧缺失都会导致测试失败。
 
 ## 3. Health
 
 ### GET `/healthz`
 
-用于进程级 liveness。它不检查数据库、EMQX 或设备状态，因此依赖故障时仍可返回 200。后续如需 readiness，应新增独立 `/readyz`，不能改变 `/healthz` 语义。
-
-Response `200 OK`：
+进程级 liveness。**不**检查数据库、EMQX 或设备状态，因此依赖故障时仍返回 200。该路由不需要鉴权，因为编排探针不应需要凭据。后续如需要 readiness，新增独立 `/readyz`，不改变本路由语义。
 
 ```json
-{
-  "status": "ok"
-}
+{ "status": "ok" }
 ```
 
 ## 4. Device Status
 
 ### GET `/api/v1/devices/{deviceId}/status`
-
-返回 Backend 根据最后有效遥测计算的在线状态、复合预警状态及设备最近确认配置。
-
-Response `200 OK`：
 
 ```json
 {
@@ -146,117 +133,91 @@ Response `200 OK`：
   "alarmState": "suspect",
   "localAlarm": true,
   "buzzerMuted": false,
-  "lastSeenAt": "2026-09-18T11:20:30Z",
+  "lastSeenAt": "2026-09-24T10:40:30Z",
   "offlineAfterSeconds": 15,
-  "thresholdVersion": {
-    "desired": 4,
-    "confirmed": 4
-  }
+  "thresholdVersion": { "desired": 4, "confirmed": 4 }
 }
 ```
 
-`connectivity`：`online | offline | unknown`。
+`connectivity`：`online | offline | unknown`，由 Backend 依据最后一条有效遥测的**到达时间**计算，不使用 Broker 连接状态，也不使用设备自报的 `network` 字段。
 
 `alarmState`：
 
-- `normal`：无复合预警；
-- `suspect`：部分条件成立，等待确认窗口；
-- `fire_warning`：气体突增与温升速率同时满足；
-- `acknowledged`：人员已确认，但环境尚未恢复；
-- `recovered`：指标恢复，事件等待归档或已结束。
+- `normal`：无复合预警，且记录中没有告警事件；
+- `suspect`：部分条件成立，等待确认；
+- `fire_warning`：气体突增与温升速率同时满足且达到最小样本数/时长；
+- `recovered`：最近一次事件已结束且未再次触发。`recovered` 是有意保持的状态：它与 `normal` 都表示"当前未告警"，区别在于设备是否发生过事件。首期**没有** `acknowledged`，因为不存在告警确认接口，保留该状态会形成无法产生的契约。
 
-`localAlarm` 来自设备本地判断，与 Backend 复合状态不是同一概念。
+`localAlarm` 来自设备本地判断，与 Backend 复合状态不是同一概念，两者可能不一致。
 
-Errors：`400 invalid_request`、`401`、`403`、`404 device_not_found`。
+`lastSeenAt` 来自 liveness tracker；设备从未上报时为 `null`。
 
 ## 5. Latest Telemetry
 
 ### GET `/api/v1/devices/{deviceId}/telemetry/latest`
 
-返回最近一条通过 Schema、范围和设备权限校验的遥测。没有有效遥测时返回 404，而不是使用全零对象。
-
-Response `200 OK`：
+返回最近一条通过 Schema、范围与权限校验的遥测。没有有效遥测时返回 `404`，不使用全零对象。
 
 ```json
 {
   "deviceId": "MCU001",
+  "bootId": "9f3ac21b",
   "sequence": 42,
-  "timestamp": "2026-09-18T11:20:29Z",
-  "receivedAt": "2026-09-18T11:20:30Z",
+  "timestamp": "2026-09-24T10:40:29Z",
+  "receivedAt": "2026-09-24T10:40:30Z",
   "temperatureC": 28.0,
   "humidityRh": 61.0,
   "gasAdcRaw": 1350,
   "gasAdcFiltered": 1328,
   "gasPpm": 25.0,
+  "gasCalibrated": false,
   "localAlarm": true,
   "alarmCauses": ["gas_high"],
   "buzzerMuted": false,
-  "network": "online"
+  "network": "online",
+  "sensorFault": false
 }
 ```
 
-`timestamp` 在设备未同步时间时允许为 `null`；`receivedAt` 永远由 Backend 填充。
+`timestamp` 在设备未同步时钟时为 `null`；`receivedAt` 永远由 Backend 填充。`gasCalibrated=false` 时 `gasPpm` 是未标定估算值，客户端应优先展示 ADC 安全分级。
 
 ## 6. Historical Telemetry
 
 ### GET `/api/v1/devices/{deviceId}/telemetry`
 
-Query parameters：
-
 | Name | Type | Required | Rules |
 | --- | --- | --- | --- |
-| `from` | RFC 3339 | No | Inclusive; default `now-1h` |
-| `to` | RFC 3339 | No | Exclusive; default `now` |
-| `limit` | integer | No | 1–1000; default 200 |
-| `cursor` | string | No | Opaque cursor returned by previous page |
-| `order` | enum | No | `asc` or `desc`; default `asc` |
+| `from` | RFC 3339 | No | 含端点；默认 `now-1h` |
+| `to` | RFC 3339 | No | 不含端点；默认 `now` |
+| `limit` | integer | No | 1–1000；默认 200 |
+| `cursor` | string | No | 上一页返回的不透明游标 |
+| `order` | enum | No | `asc` 或 `desc`；默认 `asc` |
 
-`cursor` 出现时，`from/to/order` 必须与第一页一致。最大查询跨度建议限制为 31 天；更长区间应采用聚合接口或导出任务，而不是一次返回全部原始数据。
+**游标规则**：出现 `cursor` 时**必须**同时重复第一页的 `from` 与 `to`，否则返回 `400`。游标内绑定了 `(deviceId, from, to, order)`，不匹配时同样返回 `400`，不会静默返回另一条序列的分页。`limit` 允许在翻页之间改变。
 
-Example：
+排序与游标使用稳定组合键 `(eventTime, bootId, sequence)`。`eventTime` 在设备时钟未同步时取 `receivedAt`，因此排序键永不为空。同一时间戳的多条记录不会跳页或重复。
 
-```http
-GET /api/v1/devices/MCU001/telemetry?from=2026-09-18T10:00:00Z&to=2026-09-18T11:00:00Z&limit=200&order=asc
-```
-
-Response `200 OK`：
+最大查询跨度 31 天；更长区间应使用聚合接口或导出任务。
 
 ```json
 {
-  "items": [
-    {
-      "deviceId": "MCU001",
-      "sequence": 41,
-      "timestamp": "2026-09-18T11:20:24Z",
-      "receivedAt": "2026-09-18T11:20:25Z",
-      "temperatureC": 27.8,
-      "humidityRh": 61.0,
-      "gasAdcRaw": 1331,
-      "gasAdcFiltered": 1310,
-      "gasPpm": 24.1,
-      "localAlarm": false,
-      "alarmCauses": [],
-      "buzzerMuted": false
-    }
-  ],
-  "nextCursor": null
+  "items": [ { "deviceId": "MCU001", "sequence": 41, "...": "..." } ],
+  "nextCursor": "eyJ0IjoxNzkw..."
 }
 ```
 
-索引与排序必须使用稳定组合键，例如 `(device_id, event_time, sequence, id)`，避免相同时间戳造成跳页或重复。
+`nextCursor` 为 `null` 表示已是最后一页。
 
 ## 7. Alert Events
 
 ### GET `/api/v1/devices/{deviceId}/alerts`
 
-Query parameters：`from`、`to`、`limit`、`cursor` 与历史遥测一致，另支持：
+查询参数：`from`、`to`、`limit`、`cursor` 与历史遥测一致，另支持：
 
 | Name | Type | Meaning |
 | --- | --- | --- |
-| `state` | enum | 按 `suspect/fire_warning/acknowledged/recovered` 过滤 |
+| `state` | enum | 按 `normal/suspect/fire_warning/recovered` 过滤 |
 | `active` | boolean | 仅返回尚未结束的事件 |
-
-Response `200 OK`：
 
 ```json
 {
@@ -265,15 +226,15 @@ Response `200 OK`：
       "id": "01K5H7T7T4J2MYE7Y0BR1ZBQ0Q",
       "deviceId": "MCU001",
       "state": "fire_warning",
-      "startedAt": "2026-09-18T11:18:00Z",
-      "acknowledgedAt": null,
+      "startedAt": "2026-09-24T10:18:00Z",
       "endedAt": null,
       "evidence": {
-        "gasRise": 187.0,
-        "gasRiseThreshold": 150.0,
-        "temperatureRateCPerMinute": 4.2,
+        "gasAdcRise": 600,
+        "gasAdcRiseThreshold": 150,
+        "temperatureRateCPerMinute": 6.0,
         "temperatureRateThresholdCPerMinute": 3.0,
-        "sampleCount": 8
+        "sampleCount": 8,
+        "windowSeconds": 35
       }
     }
   ],
@@ -281,32 +242,31 @@ Response `200 OK`：
 }
 ```
 
-事件必须保存触发证据，客户端不能仅凭展示时的最新值反推历史告警原因。
+事件在触发时写入证据，**不会**在读取时重算。客户端不能用当前实时值反推历史告警原因。气体项以 ADC 码而非 ppm 表示：估算浓度未标定、`gasPpm` 可能缺失，而增量本身在未标定时仍然有效。
+
+每台设备**至多一个未结束事件**（数据库部分唯一索引强制）。
 
 ## 8. Thresholds
 
 ### GET `/api/v1/devices/{deviceId}/thresholds`
-
-区分 Backend 期望配置与设备确认配置。两者版本不一致表示控制命令仍在等待、失败或设备离线。
-
-Response `200 OK`：
 
 ```json
 {
   "desiredVersion": 4,
   "confirmedVersion": 3,
   "temperatureHighC": 30.0,
+  "humidityHighRh": 80.0,
   "gasHighPpm": 80.0,
-  "updatedAt": "2026-09-18T11:10:00Z",
+  "updatedAt": "2026-09-24T10:10:00Z",
   "confirmationState": "pending"
 }
 ```
 
-`confirmationState`：`confirmed | pending | rejected | timed_out`。
+设备从未被配置时返回**编译期默认值**（`hardware/STM32_Project1/User/app_config.h`：30 °C / 80 %RH / 20 ppm）与 `desiredVersion: 1`、`confirmedVersion: null`。版本 1 定义为"编译期默认"，因此设备永远不会报告版本 0。
+
+`confirmationState`：`confirmed`（设备确认版本 ≥ 期望版本）| `pending` | `rejected`（保留）| `timed_out`（保留）。当前实现只产生 `confirmed` 与 `pending`；`rejected` 与 `timed_out` 由命令资源表达，避免同一事实两处不一致。
 
 ### PUT `/api/v1/devices/{deviceId}/thresholds`
-
-校验阈值，生成新版本并异步发布 `set_thresholds` MQTT 命令。HTTP 202 只表示 Backend 接受命令，不表示设备已写入 Flash。
 
 Headers：
 
@@ -315,74 +275,110 @@ Content-Type: application/json
 Idempotency-Key: 01K5H0PN0M1N9NB8B7RBTVWT8P
 ```
 
-Request：
-
 ```json
-{
-  "temperatureHighC": 30.0,
-  "gasHighPpm": 80.0
-}
+{ "temperatureHighC": 30.0, "humidityHighRh": 80.0, "gasHighPpm": 80.0 }
 ```
 
-初始允许范围：
+三个字段**全部必填**且不允许额外字段。范围：
 
-- `temperatureHighC`: 0–80 °C；
-- `gasHighPpm`: 1–999 ppm。
+- `temperatureHighC`：0–80 °C
+- `humidityHighRh`：0–100 %RH
+- `gasHighPpm`：1–999 ppm（与 `gasPpm` 同单位的估算值）
 
-最终范围必须与固件能力一致。若气体尚未完成 ppm 标定，应在协议评审后改用明确命名的 ADC 阈值，不能混用单位。
-
-Response `202 Accepted`：
+`202 Accepted`：
 
 ```json
 {
   "requestId": "01K5H0PN0M1N9NB8B7RBTVWT8P",
   "status": "pending",
   "desiredVersion": 4,
-  "expiresAt": "2026-09-18T11:21:30Z"
+  "expiresAt": "2026-09-24T10:21:30Z"
 }
 ```
 
-Special errors：
+**HTTP 202 只表示 Backend 接受并已发布命令，不表示设备已写入 Flash。** 客户端必须等待设备确认或超时，可通过实时流或 `GET /commands/{requestId}` 获知。
 
-- `409 version_conflict`：同一幂等键对应不同 Payload；
-- `422 invalid_threshold`：范围或单位无效；
-- `503 broker_unavailable`：没有成功发布命令。
+特殊错误：`409 version_conflict`（幂等键冲突或版本未前进）、`422 invalid_threshold`、`503 broker_unavailable`（未成功发布，命令状态为 `publish_failed`）。
 
-设备 ack 为 `applied` 后才更新 `confirmedVersion`。超时不得回滚 `desiredVersion`，而是标记 `timed_out`，供用户重试或诊断。
+超时不回滚 `desiredVersion`，而是把命令标记为 `timed_out`，供用户重试或诊断。
+
+### 阈值版本与持久化
+
+- 新版本 = 当前期望版本 + 1，严格递增。
+- 命令与期望阈值在**同一事务**中写入，避免出现"版本已前进但没有命令"的窗口。
+- 设备只在其 Flash 校验写入成功后更新生效版本并回执 `applied`。
+- 设备在遥测中持续上报 `thresholdVersion`；Backend 据此确认版本，即使原始 ACK 丢失也能收敛。
 
 ## 9. Buzzer Mute
 
 ### POST `/api/v1/devices/{deviceId}/commands/mute`
 
-静音只抑制蜂鸣器，不清除 `localAlarm`、不关闭 LED/OLED、不停止采样和上报。
-
-Headers：必须包含 `Idempotency-Key`。
-
-Request：
-
-```json
-{
-  "muted": true
-}
+```http
+Idempotency-Key: 01K5H0M8YH1F4H4X6B62R9JB5A
 ```
 
-Response `202 Accepted`：
+```json
+{ "muted": true }
+```
+
+**静音只抑制蜂鸣器**：不清除 `localAlarm`、不关闭 LED 或 OLED 标识、不停止采样与上报。控制报文中不存在"清除告警"的表达方式，本地告警判断始终是权威。
+
+`202 Accepted`：
 
 ```json
 {
   "requestId": "01K5H0M8YH1F4H4X6B62R9JB5A",
   "status": "pending",
-  "expiresAt": "2026-09-18T11:21:30Z"
+  "expiresAt": "2026-09-24T10:21:30Z"
 }
 ```
 
-设备离线时是否允许排队必须在产品规则中冻结。安全默认建议为：命令短期排队但带 `expiresAt`，过期后绝不在设备重连时执行。
+设备离线时命令短期排队并带 `expiresAt`；过期后**绝不**在重连时执行，只会被标记为 `timed_out`。
 
-## 10. WebSocket Telemetry
+## 10. Command Status
+
+### GET `/api/v1/devices/{deviceId}/commands/{requestId}`
+
+```json
+{
+  "requestId": "01K5H0PN0M1N9NB8B7RBTVWT8P",
+  "deviceId": "MCU001",
+  "type": "set_thresholds",
+  "state": "applied",
+  "acceptedAt": "2026-09-24T10:20:30Z",
+  "completedAt": "2026-09-24T10:20:32Z",
+  "expiresAt": "2026-09-24T10:21:30Z",
+  "desiredVersion": 4,
+  "confirmedVersion": 4,
+  "errorCode": null
+}
+```
+
+该路由存在的理由：客户端在 ACK 到达时可能正断线。没有它，`accepted` 与 `applied` 无法区分，超时结果也不可见。
+
+`state` 生命周期：
+
+```text
+accepted → published → applied
+                    ↘ rejected
+                    ↘ expired
+                    ↘ duplicate
+                    ↘ failed
+          ↘ timed_out
+          ↘ publish_failed
+```
+
+- `accepted`、`published` **不是**终态：设备尚未回应。
+- `applied`、`rejected`、`expired`、`duplicate`、`failed` 来自设备 ACK。
+- `timed_out`（在 `expiresAt` 前无 ACK）与 `publish_failed`（Broker 拒绝）是 Backend 的终态结论。
+- 终态**不会**被后续迟到的 ACK 改写：客户端可能已经看到过该结果。
+- 重复的相同 ACK 是幂等的（MQTT QoS 1 至少一次投递）。
+
+## 11. WebSocket Telemetry
 
 ### GET `/ws/v1/devices/{deviceId}/telemetry`
 
-客户端发送标准 WebSocket Upgrade。鉴权失败在 Upgrade 前返回 HTTP 错误；成功返回 `101 Switching Protocols`。
+标准 WebSocket Upgrade。鉴权失败在 Upgrade **之前**返回 HTTP 错误；订阅未上报过的设备返回 `404`（而不是给客户端一条永远为空的流）。连接数达到 `MAX_WS_CLIENTS` 时返回 `503 rate_limited`。
 
 服务端事件 Envelope：
 
@@ -390,64 +386,135 @@ Response `202 Accepted`：
 {
   "type": "telemetry.updated",
   "eventId": "01K5H8E4SXGPHCQQY6H11XK9RQ",
-  "occurredAt": "2026-09-18T11:20:30Z",
+  "occurredAt": "2026-09-24T10:40:30Z",
   "deviceId": "MCU001",
-  "data": {
-    "sequence": 42,
-    "temperatureC": 28.0,
-    "humidityRh": 61.0,
-    "gasAdcFiltered": 1328,
-    "gasPpm": 25.0,
-    "localAlarm": true,
-    "buzzerMuted": false
-  }
+  "data": { "sequence": 42, "temperatureC": 28.0, "gasAdcFiltered": 1328, "localAlarm": true }
 }
 ```
 
-事件类型：
+事件类型（冻结）：
 
-| Type | Meaning |
-| --- | --- |
-| `telemetry.updated` | 新的有效遥测 |
-| `device.status_changed` | online/offline/unknown 变化 |
-| `alert.state_changed` | 复合预警状态变化 |
-| `command.status_changed` | 控制命令确认、拒绝或超时 |
-| `thresholds.confirmed` | 设备确认阈值版本 |
+| Type | Meaning | `data` 内容 |
+| --- | --- | --- |
+| `telemetry.updated` | 新的有效遥测 | 遥测字段 |
+| `device.status_changed` | online/offline/unknown 变化 | `connectivity`、`lastSeenAt`、`alarmState` |
+| `alert.state_changed` | 复合预警状态变化 | 告警事件字段与证据 |
+| `command.status_changed` | 控制命令确认、拒绝或超时 | 命令状态字段 |
+| `thresholds.confirmed` | 设备确认阈值版本 | `confirmedVersion` |
 
 连接要求：
 
-- 服务端发送 ping，客户端响应 pong；具体周期在实现时固定并文档化。
-- 慢客户端采用有界队列；超过上限应断开并要求客户端 REST 补数，不能无限占用内存。
-- WebSocket 仅用于实时增量，不保证历史补发。重连后客户端先请求 latest/history，再订阅实时流。
-- 同一 `eventId` 可用于客户端去重；客户端不能假定事件绝不重复。
+- 服务端每 30 秒发送 ping，客户端必须回应 pong；两次未回应即断开。
+- 慢客户端采用**有界队列（64 条）**；队列满时断开该连接，要求客户端用 REST 补数。服务端不会无限缓冲，也不会让遥测接入依赖客户端的读取速度。
+- 实时流只承载增量，**不保证历史补发**。重连后客户端先请求 latest/history，再订阅。
+- 同一 `eventId` 可用于去重；客户端不能假定事件绝不重复。
+- 默认只允许同源 Origin；非浏览器客户端（无 Origin 头）允许连接。
 
-## 11. Consistency and Command Lifecycle
+## 12. 复合火情预警算法
 
-控制命令状态建议为：
+参数（`ALERT_*` 环境变量可覆盖，见 §13）：
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `ALERT_WINDOW_SECONDS` | 60 | 滑动窗口长度 |
+| `ALERT_MIN_SAMPLES` | 6 | 确认火警所需最小样本数（**至少 2**） |
+| `ALERT_MIN_DURATION_SECONDS` | 20 | 确认火警所需最小时间跨度 |
+| `ALERT_GAS_RISE_ADC` | 150 | 判定为气体突增的 ADC 增量 |
+| `ALERT_TEMP_RATE_C_PER_MIN` | 3.0 | 判定为快速温升的斜率 |
+| `ALERT_RECOVERY_HOLD_SECONDS` | 30 | 条件持续满足多久才结束事件 |
+
+计算方式：
 
 ```text
-accepted → published → applied
-                    ↘ rejected
-                    ↘ timed_out
-          ↘ publish_failed
+baseline      = median(窗口内最早的 max(3, len/3) 个 gasAdcFiltered)
+gasAdcRise    = 最新 gasAdcFiltered - baseline
+temperatureRate = 对 (eventTime, temperatureC) 做最小二乘拟合的斜率 × 60   // °C/min
 ```
 
-REST 202 对应 `accepted` 或已成功进入可靠发布流程。Backend 必须保存 requestId、用户、设备、期望 Payload、幂等键、发布时间、设备 ack 与失败原因。
+判据（两者同时满足才可能升为 `fire_warning`）：
 
-遥测、设备状态、告警和控制结果可能存在短暂最终一致性。API 不得把 Backend 期望值冒充设备确认值。
+```text
+gasSurge  = gasAdcRise >= ALERT_GAS_RISE_ADC
+rapidRise = temperatureRate >= ALERT_TEMP_RATE_C_PER_MIN
+confirmed = gasSurge && rapidRise && sampleCount >= MIN_SAMPLES && span >= MIN_DURATION
+```
 
-## 12. Test Requirements Per Route
+状态转移：`normal → suspect → fire_warning → recovered`。
+
+必须遵守的规则：
+
+1. **单次采样绝不产生火警**：确认需要最小样本数与最小时长；`ALERT_MIN_SAMPLES < 2` 会被配置校验拒绝。
+2. **两因子缺一不可**：只有气体或只有温升都停留在 `suspect`。
+3. **恢复需要保持**：任一条再次成立都会重置恢复计时，避免阈值附近抖动导致事件反复开合。
+4. **设备重启重置窗口**：`bootId` 变化时丢弃整段趋势，因为序列号与传感器预热状态都重新开始。
+5. **乱序样本进入窗口但不驱动状态**：迟到样本参与趋势计算，但不会改写当前设备快照或触发状态变化。
+6. **重复样本只计一次**：`(deviceId, bootId, sequence)` 重复的报文在入库前去重，不进入告警窗口。
+
+`gasAdcRise` 使用中位数基线：单个离群读数不会像使用均值那样把基线抬高并制造"突增"。
+
+## 13. Configuration
+
+全部通过环境变量提供；无配置文件。
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `BACKEND_ADDR` | `:8080` | HTTP 监听地址 |
+| `DATABASE_URL` | 空 | PostgreSQL DSN。**为空时使用内存存储，重启丢失全部数据，仅用于开发** |
+| `MQTT_BROKER_URL` | 空 | Broker 地址，`host:port`；接受并可去除 `tcp://`、`mqtt://`、`ssl://`、`tls://`、`mqtts://` 前缀。为空时禁用设备接入与控制下发 |
+| `MQTT_TLS` | `false` | 启用 TLS（最低 TLS 1.2） |
+| `MQTT_USERNAME` / `MQTT_PASSWORD` | 空 | Broker 凭据 |
+| `MQTT_CLIENT_ID` | `lab-backend` | MQTT clientId，1–23 字符 |
+| `MQTT_KEEPALIVE_SECONDS` | `30` | MQTT keep-alive |
+| `AUTH_MODE` | `none` | `none` 或 `bearer` |
+| `AUTH_TOKENS` | 空 | `token:actor,token:actor` |
+| `DEVICE_ALLOWLIST` | 空 | 允许的 `deviceId` 列表。为空时接受任何格式合法的设备号 |
+| `OFFLINE_AFTER_SECONDS` | `15` | 判定离线所需的静默时长，至少为 3 个上报周期 |
+| `COMMAND_TTL_SECONDS` | `60` | 控制命令有效期 |
+| `SWEEP_INTERVAL_SECONDS` | `5` | 离线判定与命令过期的扫描周期 |
+| `MAX_WS_CLIENTS` | `128` | 实时连接数上限 |
+| `LOG_LEVEL` | `info` | `debug`、`info`、`warn`、`error` |
+| `ALERT_*` | 见 §12 | 复合预警参数 |
+
+**非法值一律导致启动失败**，不会回退到默认值：静默回退会让一次笔误变成现场行为变化。启动日志会记录脱敏后的配置，并对 `AUTH_MODE=none`、内存存储、未配置 Broker 三种情况分别打 WARN。
+
+`DEVICE_ALLOWLIST` 存在的理由：首期主题固定为 `device/telemetry`，主题本身无法表达"哪个设备允许发布"，因此设备身份只能由 Payload 声明。在按设备凭据与 ACL 就位之前，该白名单是应用层的替代措施。
+
+## 14. 数据库
+
+PostgreSQL。Schema 由 `internal/store/migrations/` 下的 SQL 定义，进程启动时自动应用（幂等）。
+
+要点：
+
+- `telemetry` 的列名带单位；`event_time` 与 `received_at` 分开存储；`UNIQUE (device_id, boot_id, sequence)` 承载去重；`(device_id, event_time, boot_id, sequence)` 索引同时服务查询与游标。
+- `alert_events` 用部分唯一索引 `WHERE ended_at IS NULL` 保证每设备至多一个未结束事件。
+- `device_commands` 用部分唯一索引 `WHERE idempotency_key <> ''` 保证幂等键按设备唯一。
+- `device_thresholds` 的 `desired_version` 与 `confirmed_version` 分列，确认只能前进（`GREATEST`）。
+- `devices` 是派生缓存，由遥测与命令流量驱动。
+
+## 15. 一致性与命令生命周期
+
+遥测、设备状态、告警与控制结果之间存在短暂最终一致性。**API 不得把 Backend 期望值冒充设备确认值**：`desiredVersion` 与 `confirmedVersion` 分列，`Thresholds.confirmationState` 只产生实现真正能产生的取值。
+
+控制命令记录保存：requestId、类型、Payload、幂等键、操作者（actor）、接受/发布/完成时间、期望与确认版本、失败原因。
+
+## 16. 监控与诊断
+
+进程以 JSON 结构化日志输出到 stdout，关键事件包括：启动配置（脱敏）、MQTT 连接与重连、消息被拒绝（带 topic 与原因）、离线扫描失败、命令过期数量。
+
+拒绝计数按稳定的原因分类（`malformed_json`、`unknown_field`、`missing_field`、`schema_unsupported`、`out_of_range`、`device_mismatch`、`device_not_allowed` 等），可以在不解析日志正文的情况下判断是某一种系统性问题还是偶发噪声。
+
+## 17. Test Requirements Per Route
 
 每条路由至少具备：
 
 1. 方法与路径匹配测试；
 2. 合法请求/响应 Schema 测试；
-3. 非法 deviceId、JSON、Query 和范围测试；
-4. 401/403/404 等权限与资源边界测试；
-5. 数据层或 Broker 失败映射测试；
-6. 幂等、重复、超时和并发测试（控制路由）；
-7. MQTT/数据库真实集成测试（接入后）；
-8. WebSocket Upgrade、消息、心跳、慢消费者与重连测试（实现后）。
+3. 非法 deviceId、JSON、Query、游标与范围测试；
+4. 401 权限边界测试；
+5. 数据层或 Broker 失败映射测试（`503 broker_unavailable`）；
+6. 幂等、重复、超时与状态机测试（控制路由）；
+7. MQTT 与数据库集成测试；
+8. WebSocket Upgrade、消息、未授权、未知设备与慢消费者测试。
 
 Backend 统一质量命令：
 
@@ -458,9 +525,11 @@ go test -race -coverprofile=coverage.out ./...
 go tool cover -func=coverage.out
 ```
 
-可测试 Backend 包总行覆盖率至少 80%，新增/修改核心逻辑目标至少 90%。覆盖率只是门槛；错误语义、并发安全和关键集成链路仍需独立验证。
+PostgreSQL 集成套件由 `TEST_DATABASE_URL` 启用；未设置时跳过（在 CI 中必须设置，否则该套件的覆盖为 0）。内存实现与 PostgreSQL 实现跑**同一套 conformance 测试**（`internal/store/conformance_test.go`），避免两套语义漂移。
 
-## 13. Change Process
+覆盖率门槛为可测试包总行覆盖率 ≥ 80%，新增/修改核心逻辑目标 ≥ 90%。覆盖率只是门槛；错误语义、并发安全与关键集成链路仍需独立验证。
+
+## 18. Change Process
 
 修改路由或字段时必须在同一 PR 中：
 
@@ -470,3 +539,5 @@ go tool cover -func=coverage.out
 4. 更新 Handler、模型和测试；
 5. 通知 Hardware、KMP、微信端负责人；
 6. 在 Multica issue 记录兼容性、迁移和版本策略。
+
+`contract_test.go` 会核对路由表、错误码、告警状态、告警原因、命令状态与实时事件类型是否与 OpenAPI 一致；只改一侧会导致测试失败。

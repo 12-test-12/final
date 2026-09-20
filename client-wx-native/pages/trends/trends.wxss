@@ -1,0 +1,98 @@
+.page {
+  padding-bottom: 40rpx;
+}
+
+/* 页头 */
+.page-head {
+  margin-bottom: 10rpx;
+}
+
+/* 时间范围切换条：胶囊分段 */
+.range-bar {
+  display: flex;
+  margin: 20rpx 28rpx;
+  padding: 8rpx;
+  background: var(--card);
+  border: 1rpx solid var(--line);
+  border-radius: 999rpx;
+}
+.range-item {
+  flex: 1;
+  text-align: center;
+  padding: 16rpx 0;
+  font-size: 26rpx;
+  color: var(--text-2);
+  border-radius: 999rpx;
+  transition: all 0.25s ease;
+}
+.range-active {
+  background: linear-gradient(135deg, #46f5cf 0%, #17b98f 100%);
+  color: #04211a;
+  font-weight: 700;
+  box-shadow: 0 6rpx 20rpx var(--accent-glow);
+}
+
+/* 统计卡 */
+.stat-title {
+  font-size: 24rpx;
+  color: var(--text-2);
+  letter-spacing: 2rpx;
+  margin-bottom: 20rpx;
+  display: flex;
+  align-items: center;
+}
+.stat-title::before {
+  content: '';
+  width: 8rpx;
+  height: 26rpx;
+  border-radius: 4rpx;
+  margin-right: 14rpx;
+  background: linear-gradient(180deg, #46f5cf, #17b98f);
+  box-shadow: 0 0 10rpx var(--accent-glow);
+}
+.stat-row {
+  display: flex;
+}
+.stat-item {
+  flex: 1;
+  text-align: center;
+  position: relative;
+}
+.stat-item + .stat-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 15%;
+  height: 70%;
+  width: 1rpx;
+  background: var(--line);
+}
+.stat-label {
+  font-size: 21rpx;
+  color: var(--text-3);
+  letter-spacing: 2rpx;
+  margin-bottom: 8rpx;
+}
+.stat-value {
+  font-size: 40rpx;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -1rpx;
+}
+
+/* 图表占位区 */
+.chart-placeholder {
+  margin: 20rpx 28rpx;
+  height: 420rpx;
+  border: 1rpx dashed rgba(61, 240, 201, 0.3);
+  border-radius: 32rpx;
+  background: var(--card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.chart-placeholder-text {
+  color: var(--text-3);
+  font-size: 25rpx;
+  letter-spacing: 1rpx;
+}
