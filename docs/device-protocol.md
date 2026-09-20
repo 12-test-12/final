@@ -1,24 +1,39 @@
-# Device MQTT Protocol Draft
+# Device MQTT Protocol
 
-状态：`draft-v1`，尚未冻结。当前固件仍使用 TCP 文本帧，本文件描述目标 MQTT 契约。
+状态：`v1.0.0-frozen`（SHIXUN-3 契约评审通过后冻结；后续修改必须走 §9 变更流程）。
 
-## Transport
+本文是设备与 Backend 之间 MQTT 报文的事实源。当前固件仍在发送 TCP 文本帧（见 §7），MQTT 是目标态，由 SHIXUN-8 在实机验证后切换。
+
+## 1. Transport
 
 | Direction | Topic | QoS | Retain |
 | --- | --- | --- | --- |
 | Device → Cloud | `device/telemetry` | 1 | false |
+| Device → Cloud | `device/command-ack` | 1 | false |
 | Cloud → Device | `device/control` | 1 | false |
 
-首期遵照指定固定主题，通过 `deviceId` 区分设备。Broker ACL 必须限制设备发布/订阅方向。控制消息不得 retain，避免设备重连后执行过期命令。
+首期使用固定主题，通过 `deviceId` 区分设备。Broker ACL 必须限制设备发布/订阅方向：设备只允许发布到 `device/telemetry`、`device/command-ack`，只允许订阅 `device/control`。控制消息不得 retain，避免设备重连后执行过期命令。
 
-JSON 使用 UTF-8；字段名和枚举区分大小写。所有消息包含 `schemaVersion`。时间戳采用 UTC Unix 毫秒；设备时间尚未同步时，`timestamp` 可为 `null`，但必须提供 `uptimeMs`，Backend 同时记录 `receivedAt`。
+MQTT 连接参数：协议 3.1.1（或 5.0），`clientId` 必须等于 `deviceId`，`keepAlive` 30 秒，`cleanSession = true`。Backend 不得依赖 Broker 的会话状态判断设备在线，只依赖 §5 的应用层时间。
 
-## Telemetry Payload
+## 2. 通用编码规则
+
+- 编码 UTF-8；JSON 字段名与枚举值区分大小写（lower camel case / 小写下划线枚举）。
+- 所有消息必须包含 `schemaVersion`，当前为 `1`。Backend 收到不等于已支持版本的报文时记 `schema_unsupported` 并丢弃，不得猜测字段语义。
+- 时间戳使用 UTC Unix 毫秒。设备时间未同步时 `timestamp` 必须为 `null`（不得填 0 或本地猜测值），此时必须提供 `uptimeMs`；Backend 始终额外记录 `receivedAt`。
+- 报文字段一律使用明确类型。整数字段不得发送小数或字符串；`null` 只允许出现在契约声明为 nullable 的字段上。
+- Backend 对超长报文（建议上限 4 KiB）、非法 JSON、未知 `messageType`、越界数值一律拒绝并记录，不得部分入库。
+
+## 3. Telemetry Payload
+
+主题 `device/telemetry`。
 
 ```json
 {
   "schemaVersion": 1,
+  "messageType": "telemetry",
   "deviceId": "MCU001",
+  "bootId": "9f3ac21b",
   "sequence": 42,
   "timestamp": 1790246400000,
   "uptimeMs": 125000,
@@ -27,30 +42,67 @@ JSON 使用 UTF-8；字段名和枚举区分大小写。所有消息包含 `sche
   "gasAdcRaw": 1350,
   "gasAdcFiltered": 1328,
   "gasPpm": 25.0,
+  "gasCalibrated": false,
   "localAlarm": true,
   "alarmCauses": ["gas_high"],
   "buzzerMuted": false,
   "network": "online",
-  "thresholdVersion": 3
+  "thresholdVersion": 3,
+  "sensorFault": false
 }
 ```
 
-### Telemetry Rules
+### 3.1 字段
 
-- `sequence` 是设备启动期间单调递增的无符号计数，用于识别重复与丢包。
-- `gasAdcRaw`、`gasAdcFiltered` 范围为 0–4095。
-- `gasPpm` 是标定后的估算值；标定前客户端应优先展示 ADC 安全评级而非声称精确浓度。
-- `alarmCauses` 可选值：`temperature_high`、`gas_high`、`rapid_temperature_rise`、`rapid_gas_rise`、`sensor_fault`。
-- `network` 可选值：`online`、`reconnecting`。Backend 根据最后有效遥测独立计算设备是否离线。
-- `localAlarm=true` 时，即使 `buzzerMuted=true`，LED、OLED 标识和上报仍保持告警。
+| Field | Type | Required | Unit / Range | Notes |
+| --- | --- | --- | --- | --- |
+| `schemaVersion` | integer | yes | `1` | 固定值 |
+| `messageType` | string | yes | `telemetry` | 与 ACK 报文区分 |
+| `deviceId` | string | yes | `^[A-Za-z0-9_-]{1,32}$` | 必须与 `clientId` 一致 |
+| `bootId` | string | yes | `^[A-Za-z0-9]{1,16}$` | 每次上电生成的新标识，见 §5.1 |
+| `sequence` | integer | yes | 0 – 4294967295 | 本次启动内单调递增，见 §5.1 |
+| `timestamp` | integer \| null | yes | UTC 毫秒 | 未同步时钟时为 `null` |
+| `uptimeMs` | integer | yes | ≥ 0 毫秒 | 自本次上电起，始终有效 |
+| `temperatureC` | number | yes | −40 – 80 °C | DHT11 整数分辨率，一位小数以内 |
+| `humidityRh` | number | yes | 0 – 100 %RH | DHT11 整数分辨率 |
+| `gasAdcRaw` | integer | yes | 0 – 4095 | 最近一次 ADC 原始值 |
+| `gasAdcFiltered` | integer | yes | 0 – 4095 | 滑动窗口滤波后的 ADC 值 |
+| `gasPpm` | number \| null | yes | ≥ 0 ppm | 估算浓度；未标定时客户端的精度约束见 §3.3 |
+| `gasCalibrated` | boolean | yes | | `false` 表示 `gasPpm` 来自未标定曲线 |
+| `localAlarm` | boolean | yes | | 设备本地综合判断结果 |
+| `alarmCauses` | string[] | yes | 见下 | 为空数组表示无本地告警 |
+| `buzzerMuted` | boolean | yes | | 仅表示蜂鸣器是否被静音 |
+| `network` | string | yes | `online` \| `reconnecting` | 设备自身网络状态 |
+| `thresholdVersion` | integer | yes | ≥ 1 | 设备当前生效的阈值版本，见 §4.3 |
+| `sensorFault` | boolean | yes | | 任一传感器读取失败时为 `true` |
 
-## Control Payload
+`alarmCauses` 枚举（冻结）：`temperature_high`、`humidity_high`、`gas_high`、`rapid_temperature_rise`、`rapid_gas_rise`、`sensor_fault`。
+
+### 3.2 语义规则
+
+- `localAlarm = true` 时，即使 `buzzerMuted = true`，LED、OLED 标识和上报仍然保持告警。静音永不改变 `localAlarm`。
+- `gasAdcRaw` 与 `gasAdcFiltered` 必须同时上报，以便在未标定阶段用 ADC 做安全分级并保留校准证据。
+- `sensorFault = true` 时，`temperatureC`/`humidityRh` 使用最后一次有效值，并同时给出 `alarmCauses: ["sensor_fault"]`；不得用 0 冒充有效读数。
+- Backend 只依据 `receivedAt` 与 `timestamp`（若存在）判断在线，不接受设备自报的 `network` 作为在线依据。
+
+### 3.3 未标定阶段的气体展示约束
+
+`gasPpm` 在 `gasCalibrated = false` 时是未标定曲线估算值，**不得**用于定量结论。契约要求：
+
+- 客户端在 `gasCalibrated = false` 时必须优先展示 ADC 分级（例如「安全 / 关注 / 超限」）而不是精确 ppm。
+- Backend 的阈值同样以该估算值比较，单位与 `gasPpm` 一致；不得混用 ADC 与 ppm 两种单位。
+- 完成预热、负载电阻确认与标准气体标定后，设备置 `gasCalibrated = true`，客户端可展示 ppm 数值。
+
+## 4. Control Payload
+
+主题 `device/control`。
 
 远程静音：
 
 ```json
 {
   "schemaVersion": 1,
+  "messageType": "control",
   "deviceId": "MCU001",
   "requestId": "01K5H0M8YH1F4H4X6B62R9JB5A",
   "issuedAt": 1790246400000,
@@ -67,6 +119,7 @@ JSON 使用 UTF-8；字段名和枚举区分大小写。所有消息包含 `sche
 ```json
 {
   "schemaVersion": 1,
+  "messageType": "control",
   "deviceId": "MCU001",
   "requestId": "01K5H0PN0M1N9NB8B7RBTVWT8P",
   "issuedAt": 1790246400000,
@@ -75,25 +128,83 @@ JSON 使用 UTF-8；字段名和枚举区分大小写。所有消息包含 `sche
   "payload": {
     "thresholdVersion": 4,
     "temperatureHighC": 30.0,
+    "humidityHighRh": 80.0,
     "gasHighPpm": 80.0
   }
 }
 ```
 
-设备必须验证 `schemaVersion`、`deviceId`、过期时间、类型和数值范围，并按 `requestId` 去重。`set_mute` 不得清除告警状态；`set_thresholds` 只有在 Flash 校验写入成功后才更新 `thresholdVersion`。
+### 4.1 设备校验顺序（冻结）
 
-## Command Acknowledgement
+设备必须按以下顺序校验，任一步失败立即以 `rejected` 回执，不得执行副作用：
 
-为闭合控制链路，设备使用同一上报主题发送确认事件；在实现评审时也可拆分为专用 ack 主题，但必须同步修改契约。
+1. `schemaVersion` 等于设备支持版本；
+2. `deviceId` 与自身一致（防止错投）；
+3. `requestId` 非空且未在本机去重表中出现过（见 §4.2）；
+4. `expiresAt` 未过期（设备时钟不可信时，以「收到命令的本地单调时间 + 允许窗口」为判据，见 §4.4）；
+5. `type` 是受支持类型；
+6. 数值字段类型与范围合法（见 §4.3）。
+
+### 4.2 requestId 去重
+
+- 设备保留最近 N 条（建议 ≥ 16）`requestId` 的**处理结果**，用于重复命令回执 `duplicate`。
+- 重复命令必须返回首次的处理结果状态，不得重复执行，不得重复写 Flash。
+- 去重表在重启后允许丢失；丢失后重复命令按新命令处理是允许的，但超出 `expiresAt` 的命令仍必须拒绝为 `expired`。
+
+### 4.3 阈值范围与版本（冻结）
+
+| Field | Range | Unit |
+| --- | --- | --- |
+| `thresholdVersion` | 1 – 2147483647 | 无 |
+| `temperatureHighC` | 0 – 80 | °C |
+| `humidityHighRh` | 0 – 100 | %RH |
+| `gasHighPpm` | 1 – 999 | ppm（估算值，与 `gasPpm` 同单位） |
+
+- `thresholdVersion` 必须严格大于设备当前版本才接受；小于或等于当前版本的命令回执 `rejected`。
+- **版本 1 定义为编译期默认阈值**（对应 `hardware/STM32_Project1/User/app_config.h`）。设备上电后 `thresholdVersion` 至少为 1，因此遥测中的 `thresholdVersion` 永不为 0。
+- 只有 Flash 校验写入成功后才更新生效版本；写入失败必须回执 `failed` 并继续使用上一次有效配置。
+- 阈值故意包含湿度：固件对湿度超限同样驱动声光报警，若云端无法配置该阈值，本地告警就存在无法远程收敛的盲区。
+
+### 4.4 过期判据
+
+`expiresAt` 是 UTC 毫秒，允许窗口建议 60 秒。设备时钟未同步时无法比较绝对时间，因此：
+
+- 设备在收到命令时记录本地单调时间 `receivedUptimeMs`；
+- 若设备时钟已同步，直接比较 `expiresAt`；
+- 若未同步，设备使用 Backend 在命令中给出的窗口长度（`expiresAt - issuedAt`）作为允许窗口，从 `receivedUptimeMs` 起算；
+- 两种情况下，设备重启后清空的未执行命令一律视为 `expired`，**绝不**在重连后补执行过期命令。
+
+## 5. 去重、排序与在线判定
+
+### 5.1 遥测唯一性与顺序
+
+- `sequence` 是本次启动期间单调递增的无符号计数，每次上电从 0 或 1 重新开始。
+- `bootId` 在每次上电时重新生成，设备内唯一即可（例如基于备份寄存器复位计数与 `uptimeMs` 的短哈希，最多 16 个 ASCII 字符）。
+- **Backend 的唯一键与去重键为 `(deviceId, bootId, sequence)`**。仅使用 `sequence` 会在设备重启后把合法新数据误判为重复。
+- 同一 `(deviceId, bootId, sequence)` 的重复投递必须幂等：只入库一次，重复报文只计入重复计数。
+- 乱序投递（`sequence` 回退但 `bootId` 相同）按到达顺序入库，但不得回退 `latest` 指针与告警窗口；告警计算以事件时间为序，见 Backend 文档。
+
+### 5.2 心跳与离线判定
+
+- **遥测报文即心跳**，不单独定义心跳主题。正常上报周期 5 秒。
+- Backend 在连续 3 个上报周期（默认 15 秒）未收到有效遥测时判定 `offline`；判定阈值可配置。
+- 恢复收到合法遥测后立即置 `online` 并产生状态变化事件。
+- 告警状态变化时设备应立即补报一次，不等下一个 5 秒周期。
+- Broker 连接状态不得替代应用层最后遥测时间。
+
+## 6. Command Acknowledgement
+
+主题 `device/command-ack`（**契约冻结决策**：从草案的「复用 `device/telemetry`」改为独立主题，避免遥测与 ACK 两种 Schema 混在同一流上，便于 Broker ACL 与校验分离）。
 
 ```json
 {
   "schemaVersion": 1,
+  "messageType": "command_ack",
   "deviceId": "MCU001",
+  "bootId": "9f3ac21b",
   "sequence": 43,
   "timestamp": 1790246401000,
   "uptimeMs": 126000,
-  "messageType": "command_ack",
   "requestId": "01K5H0PN0M1N9NB8B7RBTVWT8P",
   "status": "applied",
   "thresholdVersion": 4,
@@ -101,15 +212,64 @@ JSON 使用 UTF-8；字段名和枚举区分大小写。所有消息包含 `sche
 }
 ```
 
-`status` 可选值：`applied`、`rejected`、`expired`、`duplicate`、`failed`。Backend REST 控制接口只表示命令已接受发布，客户端必须等待该确认或超时结果。
+`status` 枚举（冻结）：
 
-## Migration From Current Firmware
+| Status | Meaning |
+| --- | --- |
+| `applied` | 命令已执行并生效（阈值命令同时表示 Flash 写入成功） |
+| `rejected` | 校验失败，未产生副作用；`errorCode` 必填 |
+| `expired` | 超过 `expiresAt`，未执行 |
+| `duplicate` | `requestId` 已处理过，返回首次结果 |
+| `failed` | 校验通过但执行失败（例如 Flash 写入或校验失败）；`errorCode` 必填 |
 
-当前设备发送：
+`errorCode` 枚举（冻结）：`schema_unsupported`、`device_mismatch`、`bad_request_type`、`out_of_range`、`stale_version`、`flash_write_failed`、`flash_verify_failed`。
+
+`thresholdVersion`：仅 `set_thresholds` 且结果为 `applied`/`duplicate` 时给出设备当前生效版本；其他类型为 `null`。
+
+REST 控制接口返回 202 只表示命令已被 Backend 接受并进入发布流程，**不代表设备已执行**。客户端必须等待 ACK 或超时结果。
+
+## 7. 与现状 TCP 文本帧的迁移
+
+当前固件（`hardware/Esp8266/esp8266.c`）发送的是换行结尾的文本帧：
 
 ```text
 REG|MCU001
-APP001|<temperature>|<humidity>|<gas_ppm>
+APP001|<temperature>|<humidity>|<gasPpm>
 ```
 
-迁移时先在联调分支增加 MQTT 编解码和主题订阅，实机验证后再停止旧 TCP 发送。禁止在同一次未经验证的修改中同时迁移 HAL、重写传感器驱动并切换 MQTT。
+其中 `APP001` 是硬编码帧标签，不是设备号；`<temperature>`、`<humidity>` 为整数，`<gasPpm>` 为整数估算值。
+
+迁移规则（冻结）：
+
+1. MQTT 编解码与订阅**新增**在现有 TCP 代码旁，不删除、不改写现有 TCP 路径。
+2. 实机验证 MQTT 全部通过（冷启动、AP 不存在、密码错误、Broker 重启、断网恢复、重复命令、超长 Payload）后，才允许停止旧 TCP 发送。
+3. 禁止在同一次未经验证的修改中同时迁移 HAL、重写传感器驱动并切换 MQTT。
+4. 迁移期间字段映射：文本帧的 `<temperature>` → `temperatureC`（整数部分）、`<humidity>` → `humidityRh`、`<gasPpm>` → `gasPpm`；文本帧缺少的 `bootId`、`sequence`、`gasAdcRaw`、`gasAdcFiltered`、`thresholdVersion` 等字段必须在 MQTT 路径中补齐，不能靠 Backend 猜测。
+
+## 8. 契约冻结决策记录
+
+| ID | 决策 | 理由 |
+| --- | --- | --- |
+| FD-1 | ACK 拆分为独立主题 `device/command-ack` | 遥测与 ACK Schema 不同，混流会削弱校验与 ACL 表达能力；草案已允许拆分并要求同步契约 |
+| FD-2 | 新增 `bootId`，去重键为 `(deviceId, bootId, sequence)` | `sequence` 每次重启归零，仅用 `sequence` 会丢数据 |
+| FD-3 | 阈值新增 `humidityHighRh` | 固件湿度超限同样声光报警，缺少该字段会造成云端无法收敛的告警盲区 |
+| FD-4 | 气体阈值与 `gasPpm` 同单位（估算 ppm），新增 `gasCalibrated` | 避免 ADC 与 ppm 混用；未标定时在契约层强制降级为分级展示 |
+| FD-5 | 遥测新增 `messageType`、`sensorFault`；`network` 仅由设备自报 | 与 ACK 分流后需要报文类型标识；传感器故障必须有显式字段而非伪造 0 值 |
+| FD-6 | `thresholdVersion = 1` 定义为编译期默认阈值 | 使「设备从未收到过阈值命令」有明确表示，避免 0/未定义 |
+| FD-7 | 遥测即心跳，5 秒周期，15 秒判离线 | 避免为心跳引入独立主题与额外状态 |
+| FD-8 | 保留 `rapid_temperature_rise`、`rapid_gas_rise` 枚举 | 固件本地快速通道与 Backend 复合预警都需要表达该类告警原因 |
+| FD-9 | Backend 侧 `acknowledged` 告警状态移出首期冻结范围 | 首期没有告警确认接口，保留该状态会形成无法产生的契约；作为二期扩展值记录在 Backend 文档 |
+| FD-10 | 阈值范围 `temperatureHighC` 0–80、`humidityHighRh` 0–100、`gasHighPpm` 1–999 | 与固件 `uint8` 采样能力及 APP001 帧整数取值范围一致，留出余量 |
+| FD-11 | 新增 `GET /api/v1/devices/{deviceId}/commands/{requestId}` | 客户端断线重连后必须能查询命令最终结果，否则 `accepted`/`applied` 无法区分，超时结果不可见 |
+| FD-12 | 复合火情的证据字段使用 `gasAdcRise` / `gasAdcRiseThreshold`（ADC 码），不使用 ppm | 增量是差值，未标定时仍然有效；`gasAdcFiltered` 恒有值而 `gasPpm` 可为 `null`。若用 ppm 表达，未标定设备将无法产生可解释的告警证据 |
+| FD-13 | 实现层不保留 `not_implemented` 错误码 | 首期路由全部实现，保留一个不会被产生的错误码会形成无法验证的契约；实时流未配置改为启动期错误而非运行期响应 |
+
+## 9. 变更流程
+
+修改本契约必须同时：
+
+1. 更新本文件与 `docs/api/openapi.yaml`；
+2. 更新 `backend/docs/api.md` 与 Handler、模型、测试；
+3. 在 Multica 中于 Hardware / Backend / 客户端各自 issue 交叉引用，说明兼容性、迁移与版本策略；
+4. 请求 Hardware、KMP、微信端负责人评审；
+5. `schemaVersion` 不兼容变化必须递增，并记录旧版本的处理方式（拒绝并记录，不静默降级）。
