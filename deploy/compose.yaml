@@ -1,0 +1,39 @@
+# Reproducible integration environment for the lab monitoring system.
+#
+# It starts only EMQX. PostgreSQL uses the existing postgres-dev container;
+# initialize its lab database with backend/database/bootstrap.sql first.
+#
+# Usage:
+#   docker start postgres-dev
+#   docker compose -f deploy/compose.yaml up -d emqx
+#   DATABASE_URL='postgres://postgres:<existing-password>@localhost:5432/lab?sslmode=disable' \
+#   MQTT_BROKER_URL='localhost:1883' MQTT_USERNAME=backend MQTT_PASSWORD=backend-secret \
+#     go run ./backend
+#
+# See docs/integration-testing.md for the full acceptance run.
+
+name: lab-monitoring
+
+services:
+  emqx:
+    image: emqx/emqx:5.8
+    environment:
+      # Phase 1 runs without TLS because the deployment target is a lab network.
+      # The plan records TLS as a deployment condition, not a phase-1 one.
+      EMQX_LISTENERS__TCP__DEFAULT__BIND: "0.0.0.0:1883"
+      EMQX_DASHBOARD__DEFAULT_USERNAME: admin
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: admin-secret
+      # File-based authorization, so the ACL is reviewable in the repository
+      # rather than only in a dashboard. Devices and the backend get separate
+      # accounts with the access the frozen contract requires.
+      EMQX_AUTHORIZATION__SOURCES: '[{"type":"file","enable":true,"path":"/opt/emqx/etc/acl.conf"}]'
+    ports:
+      - "1883:1883"
+      - "18083:18083"
+    volumes:
+      - ./emqx/acl.conf:/opt/emqx/etc/acl.conf:ro
+    healthcheck:
+      test: ["CMD", "emqx", "ctl", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
