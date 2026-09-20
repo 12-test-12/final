@@ -67,6 +67,8 @@ TEST_DATABASE_URL='postgres://postgres:password@localhost:5432/lab_test?sslmode=
 
 未设置该变量时套件跳过，因此 CI 必须提供它，否则数据库路径的实际覆盖为零。
 
+内置 MQTT 测试 Broker 的生命周期回归用例可单独运行：`go test -race -count=20 ./internal/mqtt/mqtttest`。它覆盖关闭时并发接入且客户端未发送 CONNECT 的情况，防止测试清理阶段无限等待。
+
 CI 要求可测试代码总行覆盖率 ≥ 80%，新增/修改的核心逻辑目标 ≥ 90%。覆盖率文件 `coverage.out` 是生成物，不提交。
 
 ## 结构与边界
