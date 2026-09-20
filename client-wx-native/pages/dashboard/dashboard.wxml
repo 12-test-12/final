@@ -1,0 +1,93 @@
+<view class="page">
+  <!-- 页头 -->
+  <view class="page-head">
+    <view class="page-head-title">环境监控</view>
+    <view class="page-head-sub">SMART LAB · 实时动环监测</view>
+  </view>
+
+  <!-- 告警状态横幅 -->
+  <view class="banner banner-{{banner.level}}">
+    <view class="banner-dot"></view>
+    <view class="banner-body">
+      <view class="banner-text">{{banner.text}}</view>
+      <view class="banner-sub" wx:if="{{banner.sub}}">{{banner.sub}}</view>
+    </view>
+  </view>
+
+  <!-- 三项指标卡 -->
+  <view class="metrics" wx:if="{{view}}">
+    <view class="metric-card metric-temp">
+      <view class="metric-top">
+        <view class="metric-icon">°</view>
+        <view class="metric-label">温度</view>
+      </view>
+      <view class="metric-value">{{view.temperatureC}}<text class="metric-unit">°C</text></view>
+      <view class="metric-bar">
+        <view class="bar-fill fill-temp" style="width: {{view.tempPercent}}%"></view>
+      </view>
+    </view>
+    <view class="metric-card metric-hum">
+      <view class="metric-top">
+        <view class="metric-icon">💧</view>
+        <view class="metric-label">湿度</view>
+      </view>
+      <view class="metric-value">{{view.humidityRh}}<text class="metric-unit">%</text></view>
+      <view class="metric-bar">
+        <view class="bar-fill fill-hum" style="width: {{view.humPercent}}%"></view>
+      </view>
+    </view>
+    <view class="metric-card metric-gas">
+      <view class="metric-top">
+        <view class="metric-icon">☁</view>
+        <view class="metric-label">气体</view>
+      </view>
+      <view class="metric-value">{{view.gasPpm}}<text class="metric-unit">ppm</text></view>
+      <view class="metric-bar">
+        <view class="bar-fill fill-gas" style="width: {{view.gasPercent}}%"></view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 设备状态卡 -->
+  <view class="card" wx:if="{{latest}}">
+    <view class="status-row">
+      <view class="device-wrap">
+        <view class="device-pulse {{connectivity.level === 'ok' ? '' : 'device-pulse-off'}}"></view>
+        <view class="device-name">{{deviceId}}</view>
+      </view>
+      <view class="tag tag-{{connectivity.level}}">{{connectivity.text}}</view>
+    </view>
+    <view class="status-grid">
+      <view class="status-item">
+        <view class="status-label">设备报警</view>
+        <view class="status-value {{latest.localAlarm ? 'value-red' : 'value-green'}}">{{latest.localAlarm ? '报警中' : '正常'}}</view>
+      </view>
+      <view class="status-item">
+        <view class="status-label">蜂鸣器</view>
+        <view class="status-value {{latest.buzzerMuted ? 'value-amber' : ''}}">{{latest.buzzerMuted ? '已静音' : '鸣叫中'}}</view>
+      </view>
+      <view class="status-item">
+        <view class="status-label">更新时间</view>
+        <view class="status-value status-time">{{updatedAt}}</view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 蜂鸣器远程控制 -->
+  <view class="card" wx:if="{{latest}}">
+    <view class="mute-row">
+      <view class="mute-info">
+        <view class="mute-title">蜂鸣器远程控制</view>
+        <view class="mute-desc">静音只关闭声音，不影响检测和上报</view>
+      </view>
+      <button
+        class="btn {{latest.buzzerMuted ? 'btn-outline' : 'btn-primary'}} mute-btn"
+        bindtap="onMuteTap"
+        loading="{{muting}}"
+      >{{latest.buzzerMuted ? '恢复鸣叫' : '远程静音'}}</button>
+    </view>
+  </view>
+
+  <view class="hint" wx:if="{{loading}}">数据加载中...</view>
+  <view class="hint" wx:if="{{error}}">{{error}}</view>
+</view>

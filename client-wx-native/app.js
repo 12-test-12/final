@@ -1,19 +1,18 @@
-// app.js
-App({
-  onLaunch() {
-    // 展示本地存储能力
-    const logs = wx.getStorageSync('logs') || []
-    logs.unshift(Date.now())
-    wx.setStorageSync('logs', logs)
+/**
+ * 应用入口。
+ *
+ * globalData.deviceId: 当前绑定的监测终端编号。硬件仅一台，按接口契约示例固定为 MCU001。
+ * globalData.env: 环境配置，见 config/env.js（含 useMock 开关与后端地址）。
+ */
+const { env } = require('./config/env.js')
 
-    // 登录
-    wx.login({
-      success: res => {
-        // 发送 res.code 到后台换取 openId, sessionKey, unionId
-      }
-    })
-  },
+App({
   globalData: {
-    userInfo: null
-  }
+    deviceId: 'MCU001',
+    env,
+  },
+  onLaunch() {
+    // 仅日志用途：确认当前数据源，便于联调排查
+    console.log('[app] 数据源:', env.useMock ? 'Mock（本地假数据）' : '真实后端', env.baseUrl)
+  },
 })

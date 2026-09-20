@@ -1,0 +1,54 @@
+.page {
+  padding-bottom: 40rpx;
+}
+
+/* 页头 */
+.page-head {
+  margin-bottom: 10rpx;
+}
+
+/* 告警卡片 */
+.alert-card {
+  padding: 26rpx 28rpx;
+}
+.alert-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.alert-time {
+  font-size: 22rpx;
+  color: var(--text-3);
+}
+
+/* 证据区：内嵌深色面板 */
+.evidence {
+  margin-top: 20rpx;
+  padding: 18rpx 22rpx;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1rpx solid rgba(255, 255, 255, 0.05);
+  border-radius: 20rpx;
+}
+.evidence-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 9rpx 0;
+}
+.evidence-label {
+  font-size: 23rpx;
+  color: var(--text-2);
+}
+.evidence-value {
+  font-size: 23rpx;
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* 底部时间线 */
+.alert-footer {
+  margin-top: 16rpx;
+  padding-top: 14rpx;
+  border-top: 1rpx solid var(--line);
+  font-size: 22rpx;
+  color: var(--text-3);
+}
