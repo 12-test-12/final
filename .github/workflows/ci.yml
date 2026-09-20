@@ -116,6 +116,31 @@ jobs:
       - name: Build firmware
         run: cmake --build out/hardware-debug --parallel 2
 
+      # The logic modules under hardware/core carry every safety-relevant
+      # decision and have no platform dependency, so they are tested on the host
+      # as well as being cross-compiled. Without this step the cross-compile is
+      # the only automated check on the hardware side, and it cannot run an
+      # assertion.
+      - name: Configure host tests
+        run: |
+          cmake -S hardware/tests -B out/hardware-host-tests \
+            -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build host tests
+        run: cmake --build out/hardware-host-tests --parallel 2
+
+      - name: Run host tests
+        run: ./out/hardware-host-tests/host_tests
+
+      - name: Report core coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S hardware/tests -B out/hardware-coverage -DENABLE_COVERAGE=ON
+          cmake --build out/hardware-coverage --parallel 2
+          ./hardware/scripts/host_coverage.sh out/hardware-coverage \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
@@ -125,6 +150,14 @@ jobs:
             out/hardware-debug/STM32_Project1.hex
             out/hardware-debug/STM32_Project1.bin
             out/hardware-debug/STM32_Project1.map
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload host test coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: hardware-core-coverage
+          path: out/hardware-coverage/host_tests.profdata
           if-no-files-found: error
           retention-days: 14
 
