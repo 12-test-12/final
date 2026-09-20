@@ -15,6 +15,8 @@
  * the process exit status reflects the result.
  */
 
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -88,6 +90,26 @@ int test_finish(void);
 
 /* Check a false boolean result. */
 #define CHECK_FALSE(condition) CHECK_MSG(!(condition), "%s is true", #condition)
+
+/* Check that `text` is a well-formed JSON value.
+ *
+ * A payload builder that produces malformed JSON would be rejected by the
+ * backend, so the host tests parse what the builders emit rather than only
+ * comparing it against an expected string. Returns false on a syntax error or a
+ * duplicate object key. */
+bool test_json_is_well_formed(const char *text, uint32_t length);
+
+/* Check that a JSON object contains the literal key `key`.
+ *
+ * The builders emit no whitespace after a colon, so a search for `"key":` is an
+ * exact test of presence for the text they produce. */
+bool test_json_has_key(const char *text, const char *key);
+
+/* Check that a JSON string value `"key":"value"` appears. */
+bool test_json_has_string(const char *text, const char *key, const char *value);
+
+/* Check that a JSON number value `"key":value` appears. */
+bool test_json_has_number(const char *text, const char *key, const char *value);
 
 /* Start a named case inside a suite. */
 #define TEST_CASE(name) printf("  case: %s\n", name)

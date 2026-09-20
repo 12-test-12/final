@@ -20,11 +20,17 @@ add_executable(${PROJECT_NAME}
     STM32_Project1/Start/startup_stm32f103c8_gcc.S
     STM32_Project1/Start/system_stm32f10x.c
     STM32_Project1/User/stm32f10x_it.c
+    STM32_Project1/User/flash_config.c
     STM32_Project1/System/delay/delay.c
     ADC/adc.c
     core/text_format.c
     core/env_monitor.c
     core/display_model.c
+    core/json_writer.c
+    core/telemetry_json.c
+    core/command_json.c
+    core/mqtt_packet.c
+    core/threshold_store.c
     dht11/dht11.c
     Esp8266/esp8266.c
     LED/led.c

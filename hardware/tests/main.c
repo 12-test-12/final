@@ -14,11 +14,21 @@
 void test_text_format_suite(void);
 void test_env_monitor_suite(void);
 void test_display_model_suite(void);
+void test_json_writer_suite(void);
+void test_telemetry_json_suite(void);
+void test_command_json_suite(void);
+void test_mqtt_packet_suite(void);
+void test_threshold_store_suite(void);
 
 int main(void)
 {
     test_run_suite("text_format", test_text_format_suite);
     test_run_suite("env_monitor", test_env_monitor_suite);
     test_run_suite("display_model", test_display_model_suite);
+    test_run_suite("json_writer", test_json_writer_suite);
+    test_run_suite("telemetry_json", test_telemetry_json_suite);
+    test_run_suite("command_json", test_command_json_suite);
+    test_run_suite("mqtt_packet", test_mqtt_packet_suite);
+    test_run_suite("threshold_store", test_threshold_store_suite);
     return test_finish();
 }

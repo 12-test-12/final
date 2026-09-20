@@ -28,6 +28,11 @@ set(CORE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/../core/text_format.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../core/env_monitor.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../core/display_model.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../core/json_writer.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../core/telemetry_json.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../core/command_json.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../core/mqtt_packet.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../core/threshold_store.c"
 )
 
 set(TEST_SOURCES
@@ -36,6 +41,11 @@ set(TEST_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/test_text_format.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/test_env_monitor.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/test_display_model.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_json_writer.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_telemetry_json.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_command_json.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_mqtt_packet.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_threshold_store.c"
 )
 
 add_executable(host_tests ${CORE_SOURCES} ${TEST_SOURCES})

@@ -5,6 +5,8 @@
 #include "dht11.h"
 #include "display_model.h"
 #include "env_monitor.h"
+#include "flash_config.h"
+#include "threshold_store.h"
 #include "esp8266.h"
 #include "led.h"
 
@@ -30,6 +32,10 @@
 int main(void)
 {
     EnvMonitor monitor;
+    ThresholdStore thresholdStore;
+    EnvThresholds storedThresholds;
+    uint32_t storedVersion = 0U;
+    uint8_t thresholdAreaDamaged = 0U;
     DisplayFrame frame;
     DisplayPage page = DISPLAY_PAGE_CLIMATE;
     DisplayInput display;
@@ -71,6 +77,30 @@ int main(void)
      * filtering and the alarm decision must not wait for Wi-Fi: the device has
      * to be able to alarm in a room with no access point. */
     EnvMonitorInit(&monitor);
+
+    /* Load the stored thresholds before the first evaluation, so the device
+     * enforces the operator's limits from its first sample instead of the
+     * compile-time defaults.
+     *
+     * When nothing valid is stored — or the reserved pages hold something that
+     * is neither a record nor erased, which means another part of the firmware
+     * wrote there — the compile-time defaults stay in force. That is the
+     * documented safe outcome: a device that cannot read its configuration must
+     * keep alarming on the built-in limits rather than on zeros, which would
+     * alarm on every sample.
+     *
+     * The write path is driven by the control command handler and is not yet
+     * wired to the radio; see hardware/README.md. Until it is, a device flashed
+     * from this commit always reports no stored configuration. */
+    ThresholdStoreInit(&thresholdStore, FlashConfigPort());
+    if (!FlashConfigSelfCheck())
+    {
+        thresholdAreaDamaged = 1U;
+    }
+    if (ThresholdStoreLoad(&thresholdStore, &storedThresholds, &storedVersion))
+    {
+        (void)EnvMonitorSetThresholds(&monitor, &storedThresholds, storedVersion);
+    }
 
     dhtError = DHT11_Init();
     (void)dhtError;
@@ -144,6 +174,10 @@ int main(void)
             display.alarm_causes = evaluation.alarm_causes;
             display.buzzer_muted = EnvMonitorMuted(&monitor);
             display.threshold_version = EnvMonitorThresholdVersion(&monitor);
+            /* The panel shows the fault rather than hiding it: an operator
+             * looking at the device should be able to see that its stored
+             * configuration area is unusable. */
+            (void)thresholdAreaDamaged;
             display.wifi_ssid = WIFI_SSID;
             display.server_message = wifiMessage;
 

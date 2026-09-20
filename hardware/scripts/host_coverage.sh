@@ -37,6 +37,18 @@ fi
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CORE_DIR="$REPO_ROOT/hardware/core"
 
+# Every module under hardware/core. Kept in one place so a module cannot be added
+# to the build and forgotten here, which would quietly understate the coverage.
+CORE_MODULES="\
+    $CORE_DIR/text_format.c \
+    $CORE_DIR/env_monitor.c \
+    $CORE_DIR/display_model.c \
+    $CORE_DIR/json_writer.c \
+    $CORE_DIR/telemetry_json.c \
+    $CORE_DIR/command_json.c \
+    $CORE_DIR/mqtt_packet.c \
+    $CORE_DIR/threshold_store.c"
+
 if ! [ -f "$BUILD_DIR/host_tests" ]; then
     echo "error: '$BUILD_DIR/host_tests' not found; build the test target first" >&2
     exit 2
@@ -62,22 +74,21 @@ echo
 echo "Line coverage for hardware/core:"
 echo
 # shellcheck disable=SC2086
-$COV report "$BUILD_DIR/host_tests" -instr-profile="$PROFDATA" \
-    "$CORE_DIR/text_format.c" "$CORE_DIR/env_monitor.c" "$CORE_DIR/display_model.c"
+# shellcheck disable=SC2086
+$COV report "$BUILD_DIR/host_tests" -instr-profile="$PROFDATA" $CORE_MODULES
 
 echo
 echo "Lines with no execution (llvm-cov prints 'line| 0|source'):"
 echo
 # shellcheck disable=SC2086
-$COV show "$BUILD_DIR/host_tests" -instr-profile="$PROFDATA" \
-    "$CORE_DIR/text_format.c" "$CORE_DIR/env_monitor.c" "$CORE_DIR/display_model.c" \
+$COV show "$BUILD_DIR/host_tests" -instr-profile="$PROFDATA" $CORE_MODULES \
     2>/dev/null | grep '|  *0|' || echo "  (none)"
 
 echo
 # Compute the aggregate over the three core files from the report table.
 # shellcheck disable=SC2086
-SUMMARY=$($COV report "$BUILD_DIR/host_tests" -instr-profile="$PROFDATA" \
-    "$CORE_DIR/text_format.c" "$CORE_DIR/env_monitor.c" "$CORE_DIR/display_model.c" \
+SUMMARY=$(# shellcheck disable=SC2086
+$COV report "$BUILD_DIR/host_tests" -instr-profile="$PROFDATA" $CORE_MODULES \
     --format=text 2>/dev/null | tail -1)
 
 COVERED=$(echo "$SUMMARY" | awk '{print $8}')

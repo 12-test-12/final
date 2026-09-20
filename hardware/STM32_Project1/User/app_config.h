@@ -31,4 +31,18 @@
 #define TEMP_RISE_THRESHOLD_C       3U
 #define GAS_RISE_THRESHOLD_ADC      150U
 
+/*
+ * 阈值掉电保存区。
+ *
+ * STM32F103C8T6 没有 EEPROM，因此用保留的两页 Flash 交替存放配置记录：
+ * 写新记录时先擦除非当前槽位，写完后读回逐字节校验，校验通过才切换当前槽位。
+ * 任何时刻断电，另一个槽位仍保存着上一次可用配置。链接脚本已把代码区缩短到
+ * 62 KiB（见 Linker/STM32F103C8Tx_FLASH.ld），因此代码不会长到这两页里。
+ *
+ * 每次只能通过 SDK 的 FLASH_ErasePage/FLASH_ProgramWord 写入，且写入地址必须
+ * 按半字对齐；驱动实现见 User/flash_config.c。
+ */
+#define THRESHOLD_FLASH_SLOT0_ADDR  0x0800F800U
+#define THRESHOLD_FLASH_SLOT1_ADDR  0x0800FC00U
+
 #endif

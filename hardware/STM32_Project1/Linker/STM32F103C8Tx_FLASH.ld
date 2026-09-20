@@ -2,7 +2,11 @@ ENTRY(Reset_Handler)
 
 MEMORY
 {
-    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 64K
+    /* The last two 1 KiB pages are reserved for the threshold records, so the
+     * code region is shortened to 62 KiB. Reserving them here rather than only
+     * in the driver means the linker fails the build if the firmware ever grows
+     * into the pages the configuration is written to. */
+    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 62K
     RAM   (xrw) : ORIGIN = 0x20000000, LENGTH = 20K
 }
 

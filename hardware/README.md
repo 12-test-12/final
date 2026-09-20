@@ -322,7 +322,12 @@ macOS 预设生成器是 `Unix Makefiles`，因此需要 `make`；Windows 命令
 ├── core/                          # 纯逻辑：无 STM32 依赖，可在主机测试
 │   ├── env_monitor.[ch]          # 滤波、阈值、突增判断、告警状态与静音
 │   ├── display_model.[ch]        # OLED 轮播页面内容
-│   └── text_format.[ch]          # 无 libc 的整数/定点转文本
+│   ├── text_format.[ch]          # 无 libc 的整数/定点转文本
+│   ├── json_writer.[ch]          # 无 libc 的 JSON 输出与转义
+│   ├── telemetry_json.[ch]       # 遥测 Payload 构造
+│   ├── command_json.[ch]         # 控制命令解析、requestId 去重、ACK 构造
+│   ├── mqtt_packet.[ch]          # MQTT 3.1.1 报文编解码
+│   └── threshold_store.[ch]      # 阈值记录格式、CRC32、双槽读写
 ├── tests/                         # 主机单元测试（独立 CMake 工程）
 ├── scripts/host_coverage.sh       # 核心逻辑行覆盖率
 ├── STM32_Project1/               # 主程序、启动文件、外设库和链接脚本
@@ -337,7 +342,7 @@ macOS 预设生成器是 `Unix Makefiles`，因此需要 `make`；Windows 命令
 
 ## 本地逻辑与主机测试
 
-`hardware/core/` 下的三个模块不依赖 STM32、GPIO 或任何驱动，只做数值到决策的转换。所有安全关键判断（阈值边界、突增判定、传感器故障、静音优先级、页面内容）都在这里，因此可以在主机上完整测试，不需要开发板在桌上。
+`hardware/core/` 下的八个模块不依赖 STM32、GPIO 或任何驱动，只做"数值/字节到决策"的转换。所有安全关键判断（阈值边界、突增判定、传感器故障、静音优先级、页面内容）都在这里，因此可以在主机上完整测试，不需要开发板在桌上。
 
 主机测试是独立的 CMake 工程，使用主机编译器；固件仍由交叉编译器构建，两者共用同一份 `core/` 源码。
 
@@ -357,13 +362,66 @@ cmake --build hardware/build/host-tests-coverage
 
 该脚本使用 clang 的 profile 格式与 `llvm-profdata`/`llvm-cov`：macOS 上 clang 写出的文件名是 `<name>.c.gcno`，而 `gcov` 查找 `<name>.gcno`，因此 `--coverage` + gcov 无法读取自己产生的数据。
 
-最新一次本机结果（macOS / Apple clang）：`core/` 三个模块合计 **96% 行覆盖、92% 分支覆盖**，286 项断言全部通过。
+最新一次本机结果（macOS / Apple clang）：`core/` 全部八个模块合计 **90% 行覆盖、79% 分支覆盖**，670 项断言全部通过。逐模块见上表脚本输出。
 
 **主机测试不能替代实机验证。** 它证明的是判断逻辑本身正确，不能证明 DHT11 时序、MQ135 预热与标定、OLED 刷新、ESP8266 连接或电气连接在现场可用。见下文「已知限制」。
 
 ## Keil 工程说明
 
 `STM32_Project1/Project.uvprojx` 是仓库中保留的旧 Keil 工程文件，但当前其源文件组为空，未完整登记现有代码。因此，Windows 下也建议使用上述 CMake + Arm GNU Toolchain 流程。若需使用 Keil µVision，应先重建工程分组、源文件、头文件路径、预处理宏和启动文件，不应直接依赖该文件构建当前固件。
+
+## MQTT 接入设计
+
+`docs/device-protocol.md` 冻结的 MQTT 契约由两个部分实现：
+
+- **报文编解码在 MCU 上完成**（`core/mqtt_packet.c`）。CONNECT、SUBSCRIBE、PUBLISH（QoS 0/1）、PUBACK、PINGREQ 由设备发出；CONNACK、SUBACK、PUBLISH、PINGRESP 由设备接收。超出该子集的（retain、will、QoS 2、MQTT 5）在发送端被拒绝，在接收端被拒绝并计数，而不是半处理。
+- **遥测与控制命令的 Payload** 分别由 `core/telemetry_json.c` 与 `core/command_json.c` 构造和解析。
+
+**为什么在 MCU 上实现而不是用 AT 的 MQTT 指令集**：ESP8266 不同 AT 固件版本的 MQTT 指令集不一致，而在这里无法确认目标模组的版本；透明 TCP 透传（`AT+CIPSTART`/`AT+CIPSEND`）是现有驱动已经在用的能力，与固件版本无关。实施方案 §4.5 把这条路列为备选，而它是两条路里唯一可以在拿到模组之前验证的——主机测试覆盖了帧格式、QoS 1 报文标识符、以及每种拒绝路径，其中 CONNECT 用逐字节的期望向量核对，因为一个只和自己一致的编解码器仍然可能发出 Broker 不接受的东西。
+
+**尚未接线**：编解码层与命令状态机已完成并通过主机测试，但**还没有接到射频上**。阻断点是 ESP8266 驱动本身：
+
+| 现状 | 需要 |
+| --- | --- |
+| `ESP8266_SEND_BUFFER_SIZE` / `ESP8266_MESSAGE_BUFFER_SIZE` 均为 64 字节 | 一帧遥测 PUBLISH 约 430 字节，缓冲区必须扩到 ~640 字节 |
+| `+IPD` 正文按 NUL 结尾的文本处理 | MQTT 帧内含 0x00 字节（如 16 位长度的低字节），需要按长度而不是按字符串交付 |
+| 主循环只调用 `ESP8266_Task` 维护 TCP 文本帧 | 需要一个由节拍驱动的会话状态机：CONNECT → SUBSCRIBE → 发布/心跳 |
+
+这三项都要改驱动，而驱动属于「未经硬件验证不得随意修改」的范围，因此按实施方案的要求**分步进行**：先交付可测试的编解码层（本次），再在实机上验证 AT 固件的透传能力后改驱动。在此之前不得声称设备已通过 MQTT 上报。
+
+## 阈值掉电保存
+
+阈值保存在保留的两页 Flash 中，链接脚本已把代码区缩短到 62 KiB 以让出这两页（`Linker/STM32F103C8Tx_FLASH.ld`），因此固件长到这两页里时链接会直接失败。
+
+记录格式固定 20 字节，字段偏移与字节序固定，不使用结构体内存映像，因此不同编译器与对齐设置下含义不变：
+
+```text
+偏移  0  magic "LTHR" (4)
+偏移  4  schemaVersion (1)
+偏移  5  version (4, 小端)
+偏移  9  temperatureHighC (1)
+偏移 10  humidityHighRh (1)
+偏移 11  gasHighPpm (2, 小端)
+偏移 13  temperatureRiseC (1)
+偏移 14  gasRiseAdc (2, 小端)
+偏移 16  crc32 (4, 小端，覆盖偏移 0..15)
+```
+
+CRC 使用反射的 IEEE 802.3 多项式，因此标准工具（`crc32`、Python `zlib.crc32`）可以直接校验 Flash 转储；主机测试用公布的校验值 `0xCBF43926`（输入 `"123456789"`）作为基准。
+
+**写入顺序**（双槽的意义所在）：
+
+1. 目标槽位是**当前槽位之外**的那一个；
+2. 擦除目标槽位（此时当前槽位完好）；
+3. 写入新记录；
+4. **读回并逐字节比较**，再校验 CRC 与版本；
+5. 全部通过才切换当前槽位。
+
+任何一步断电，另一个槽位仍保存着上一次可用配置，因此设备只会落在"旧配置"或"新配置"上，不会落在"没有配置"上。读回后的逐字节比较是必要的：CRC 只能证明记录自洽，不能证明这次写入真的生效。主机测试用 RAM 端口模拟了断电截断写入、擦除失败、写入被拒、单字节翻转与两槽同时损坏。两槽都不可用时 `ThresholdStoreLoad` 返回 false，调用方回退到编译期默认阈值——这是唯一安全的结果，用全零阈值会立刻报警。
+
+**版本严格递增**：不比当前版本新的记录会被拒绝写入，否则一条重放的旧命令就能悄悄撤销较新的配置。
+
+**尚未接线**：写入路径由控制命令处理驱动，而命令链路尚未接到射频上，因此当前烧录的固件**永远报告"没有已保存配置"并使用编译期默认阈值**。读取路径已接好（上电时调用），所以一旦命令链路着陆，先前保存的值会立即生效。
 
 ## 已知限制与待验证项
 
@@ -375,6 +433,9 @@ cmake --build hardware/build/host-tests-coverage
 4. **Wi-Fi 与服务器配置**依赖本机 `Esp8266/esp8266_config.local.h`。缺少该文件时固件使用不可联网的占位值，只保证可编译。
 5. **阈值和突增参数未现场整定。** 默认值来自实施方案文档，尚未在真实环境中统计误报与漏报。
 6. **页面文字为英文。** 现有字模资源包含中文字模，但轮播页面使用 16 字符宽的 ASCII 行；改为中文需要按宽度重新排版并核验字模覆盖范围。
+7. **MQTT 尚未接到射频上。** 报文编解码、Payload 构造、命令解析与 ACK 都已实现并有主机测试，但 ESP8266 驱动仍是 64 字节缓冲区 + 文本式 `+IPD` 解析，无法承载一帧约 430 字节且含 0x00 的 MQTT 报文。改驱动的三项工作已列在「MQTT 接入设计」；在此之前设备仍只发送 `APP001` TCP 文本帧。
+8. **阈值写入路径尚未接线。** Flash 双槽读写、CRC 与断电恢复已实现并有主机测试（含写入截断、擦除失败、单字节翻转），但写入由控制命令驱动，而命令链路未通。因此当前固件只会读取、不会写入，实际生效的始终是编译期默认阈值。
+9. **阈值小数被舍入到 1 度。** DHT11 只有 1 °C 分辨率，后台允许下发 30.5 这类小数；设备四舍五入到整度执行（30.5 → 31）。这是分辨率限制而非实现选择，已记录在 `docs/device-protocol.md`。
 
 ## Reuse Assessment
 
@@ -382,7 +443,7 @@ cmake --build hardware/build/host-tests-coverage
 
 ### Inventory
 
-- 自研/项目源码：`STM32_Project1/main.c`，`core/`（env_monitor、display_model、text_format）、`tests/`（主机单元测试），以及 ADC/MQ135、DHT11、ESP8266、OLED、LED/蜂鸣器、按键/输入和 delay 模块。
+- 自研/项目源码：`STM32_Project1/main.c` 与 `User/`（配置、Flash 端口、中断），`core/`（八个纯逻辑模块）、`tests/`（主机单元测试），以及 ADC/MQ135、DHT11、ESP8266、OLED、LED/蜂鸣器、按键/输入和 delay 模块。
 - 平台依赖：STM32F10x Standard Peripheral Library、CMSIS/启动文件和 STM32F103C8 链接脚本。
 - 构建配置：CMake 工程、Debug/Release presets、Arm GNU Toolchain 文件，以及一个未完整登记源码的旧 Keil 工程。
 - 文档与资源：本 README、`BUILDING.md`、OLED 字模数据，以及随项目保存的 Windows 字模提取工具和配置。
