@@ -80,10 +80,10 @@ uint16_t ADC_GetAvgValue(void)
  * @note  硬件：负载电阻RL=1kΩ；Ro：洁净空气中传感器电阻=10kΩ
  * @retval NH3浓度估算值，单位ppm，限幅1~999ppm
  */
-float MQ135_GetData(void)
+float MQ135_EstimatePpm(uint16_t adc_value)
 {
     float adc_val, voltage, rs, ro;
-    adc_val = ADC_GetAvgValue();                              // 获取ADC平均采样值
+    adc_val = (float)adc_value;                                // 传入的 ADC 值
     voltage = (adc_val / 4095.0f) * 3.3f;                      // ADC原始值转为引脚电压(0~3.3V)
 
     /* 防止输入为 0V 时在后续计算中除以 0。 */
@@ -96,7 +96,7 @@ float MQ135_GetData(void)
     // 公式：Rs = (VCC - Vout) / Vout * RL
     // VCC=3.3V，RL=1.0kΩ
     rs = (3.3f - voltage) / voltage * 1.0f;
-    
+
     ro = 10.0f;                                                // Ro：洁净空气下MQ135基准电阻10kΩ
     float ratio = rs / ro;                                     // 计算Rs/Ro比值，MQ系列核心参数
     float nh3_conc = 0.0f;
@@ -115,8 +115,18 @@ float MQ135_GetData(void)
     // 结果限幅，防止异常ADC值导致浓度溢出
     if(nh3_conc < 1.0f) nh3_conc = 1.0f;                       // 最低限制1ppm，避免出现0
     if(nh3_conc > 999.0f) nh3_conc = 999.0f;                   // OLED使用3位显示
-    
+
     return nh3_conc;
 }
 
-
+/**
+ * @brief MQ135传感器读取氨气NH3浓度
+ * @note  硬件：负载电阻RL=1kΩ；Ro：洁净空气中传感器电阻=10kΩ
+ * @retval NH3浓度估算值，单位ppm，限幅1~999ppm
+ * @note  取 10 次平均值后换算，保留原有调用行为；主循环改用
+ *        MQ135_EstimatePpm(滤波值) 以避免与滑动平均重复。
+ */
+float MQ135_GetData(void)
+{
+    return MQ135_EstimatePpm(ADC_GetAvgValue());
+}

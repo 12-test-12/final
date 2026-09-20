@@ -1,6 +1,8 @@
 # STM32F103C8 环境监测、阈值报警与 Wi-Fi 通信
 
-本项目是一个基于 STM32F103C8T6 的裸机环境监测程序：通过 DHT11 采集温湿度，通过 ADC 采集 MQ135 的模拟输出，并在 128×64 OLED 上实时显示。温度、湿度或气体浓度达到阈值时，报警灯和蜂鸣器开启。ESP8266/ESP8285 通过 Wi-Fi 建立 TCP 连接，上传传感器数据并在 OLED 上显示服务器下发的消息。
+本项目是一个基于 STM32F103C8T6 的裸机环境监测程序：通过 DHT11 采集温湿度，通过 ADC 采集 MQ135 的模拟输出，在 128×64 OLED 上轮播显示读数、气体详情、报警状态与网络状态。温度、湿度、气体浓度超限或温升/气体突增时，报警灯与蜂鸣器开启，且该判断不依赖网络。ESP8266/ESP8285 通过 Wi-Fi 建立 TCP 连接上传传感器数据，并把服务器下发的消息显示在 OLED 的网络页上。
+
+本地判断逻辑（滤波、阈值、突增、静音优先级、页面内容）位于不依赖硬件的 `core/` 模块中，可在主机上完整测试；见「本地逻辑与主机测试」。
 
 - 目标 MCU：STM32F103C8T6（Cortex-M3）
 - 存储器配置：64 KiB Flash、20 KiB RAM
@@ -10,14 +12,31 @@
 
 ## 功能说明
 
-程序每 1 s 采集和刷新一次：
+主循环以 **100 ms** 为一个节拍，各任务按节拍分频执行：
 
-- DHT11 温度与湿度。
-- MQ135 气体浓度估算值，ADC 通道为 `PA1 / ADC1 Channel 1`。
-- OLED 显示温度、湿度、气体浓度和当前报警来源。
-- 任意数据超限时，`PA4` 报警灯和 `PB13` 蜂鸣器开启。
+| 任务 | 周期 | 说明 |
+| --- | --- | --- |
+| MQ135 ADC 采样 | 100 ms | 原始值进入 10 点滑动窗口 |
+| DHT11 温湿度 | 1 s | 器件要求的最小采样间隔 |
+| 本地安全判断 | 100 ms | 不等待网络；断网时照常执行 |
+| OLED 刷新 | 500 ms | 每 2 s 轮播下一页 |
+| 遥测上报（TCP） | 1 s | 沿用现有 `APP001` 文本帧 |
 
-三组阈值集中在 `STM32_Project1/User/app_config.h`，默认为 30 ℃、80 %RH 和 20 ppm。气体浓度超过 20 ppm 时会触发蜂鸣器。
+**本地报警**在每次判断时综合以下条件，任一条成立即点亮 `PA4` 并驱动 `PB13`：
+
+1. 温度达到 `TEMP_HIGH_THRESHOLD_C`；
+2. 湿度达到 `HUMIDITY_HIGH_THRESHOLD_RH`；
+3. 滤波后气体估算值达到 `GAS_HIGH_THRESHOLD_PPM`；
+4. 温度突增：60 秒窗口内累计上升达到 `TEMP_RISE_THRESHOLD_C`；
+5. 气体突增：60 秒窗口内 `gasAdcFiltered` 增量达到 `GAS_RISE_THRESHOLD_ADC`（ADC 码）；
+6. DHT11 读取失败：上报 `sensor_fault`，并保持最后一次有效读数。
+
+阈值全部集中在 `STM32_Project1/User/app_config.h`，默认为 30 ℃、80 %RH、20 ppm、3 ℃ 突增、150 ADC 突增。
+`hardware/core/env_monitor.h` 直接从该头文件取默认值，因此**只需要改一个地方**，设备行为与后台上报的阈值版本 1 会同步变化。
+
+**静音语义**：远程静音只抑制蜂鸣器。LED、OLED 的告警标识、本地告警状态与上报全部保持有效；出现**新的**报警原因时会自动解除静音，避免一次静音把下一次报警一并压掉。
+
+**滤波**：`gasAdcRaw` 与 `gasAdcFiltered` 同时保留。滤波使用固定 10 点环形窗口的算术平均，窗口未填满时按已采样本数取平均，因此上电后第一秒即可用，而不是等窗口填满才输出。气体浓度估算值由**滤波后**的 ADC 换算，保证同一帧里的 `gasAdcFiltered` 与 `gasPpm` 描述同一个采样。
 
 ## 硬件与接线
 
@@ -69,13 +88,22 @@ REG|MCU001
 APP001|<temperature>|<humidity>|<gas_ppm>
 ```
 
-OLED 仅作为网络消息屏使用。Wi-Fi 初始化期间顶部显示 `Linking:BobcGn`，初始化完成后根据 ESP 返回的热点连接状态切换为 `Linked:BobcGn` 或 `Link failed`；下方上电后显示 `msg:`，服务器向该 TCP 客户端发送 ASCII 消息后，ESP 的 `+IPD` 数据会被解析并显示：
+OLED 轮播四页，每 2 秒切换，每 500 ms 刷新：
 
 ```text
-msg:<收到的消息>
+Temp: 25C          ADC raw:1350      Alarm: ---         Linked:Lab
+Humi: 050%         ADC flt:1328      Buzzer: off        msg:<第一条消息...>
+Gas: 012ppm        Est: 012ppm*      Sensor: ok         <第二条消息...>
+Thr: v1            Level: OK*        State: clear       <第三条消息...>
 ```
 
-消息会一直保留，直到服务器发送下一条消息；OLED 不再显示温度、湿度、Gas 和 Alarm 页面。较长消息会自动换行，最多显示 44 个 ASCII 字符。
+- 第 1 页：温度、湿度、气体估算值、当前生效的阈值版本。
+- 第 2 页：原始与滤波后的 ADC 值、估算浓度、气体安全等级。`*` 表示估算来自**未标定**曲线，此时应以等级而不是精确 ppm 作为判断依据。
+- 第 3 页：报警原因字母（`T` 温度、`H` 湿度、`G` 气体、`t` 温度突增、`g` 气体突增、`F` 传感器故障）、蜂鸣器实际状态、传感器状态、总状态。静音时显示 `State: MUTED`，**同时仍然显示报警原因**，不会把告警显示成正常。
+- 第 4 页：Wi-Fi 状态与服务器下发的消息（沿用原来的 `msg:` 行为，最多 44 个 ASCII 字符，超出部分省略）。
+
+Wi-Fi 初始化期间第 4 页顶部显示 `Linking:<SSID>`，完成后切换为 `Linked:<SSID>` 或 `Link fail`。
+页面渲染逻辑位于 `hardware/core/display_model.c`，可在主机上测试，见下文「本地逻辑与主机测试」。
 
 ### ST-LINK SWD 接线
 
@@ -246,16 +274,9 @@ cmake --build --preset debug --target clean
 
 ## 预期现象
 
-固件启动后，OLED 应显示：
+固件启动后，OLED 第 1 页显示 `Temp: <温度>C`、`Humi: <%RH>%`、`Gas: <ppm>ppm`、`Thr: v1`，随后每 2 秒轮播到下一页并回到第 1 页。
 
-```text
-Temp: 25C
-Humi: 060%
-Gas: 025ppm
-Alarm:---
-```
-
-`Alarm:` 后的 `T`、`H`、`G` 分别表示温度、湿度、气体浓度超限，`-` 表示对应项正常。DHT11 通信失败时温湿度位置显示 `ERR`。
+报警时第 3 页的 `Alarm:` 后出现对应字母，`Buzzer` 显示 `ON`，`State` 显示 `ALARM`；被远程静音后 `Buzzer` 变为 `off`、`State` 变为 `MUTED`，但**字母与 LED 不变**。DHT11 读取失败时第 3 页显示 `Sensor: FAULT` 与 `Alarm: F`，第 1 页保留最后一次有效读数。
 
 ## 常见问题
 
@@ -295,11 +316,17 @@ macOS 预设生成器是 `Unix Makefiles`，因此需要 `make`；Windows 命令
 
 ```text
 .
-├── CMakeLists.txt                 # 构建目标与源文件
+├── CMakeLists.txt                 # 固件构建目标与源文件
 ├── CMakePresets.json             # Debug/Release 构建预设
 ├── cmake/arm-none-eabi-gcc.cmake # Arm GNU 交叉编译工具链
+├── core/                          # 纯逻辑：无 STM32 依赖，可在主机测试
+│   ├── env_monitor.[ch]          # 滤波、阈值、突增判断、告警状态与静音
+│   ├── display_model.[ch]        # OLED 轮播页面内容
+│   └── text_format.[ch]          # 无 libc 的整数/定点转文本
+├── tests/                         # 主机单元测试（独立 CMake 工程）
+├── scripts/host_coverage.sh       # 核心逻辑行覆盖率
 ├── STM32_Project1/               # 主程序、启动文件、外设库和链接脚本
-├── ADC/                           # PA1 ADC 采样与 MQ135 浓度估算
+├── ADC/                           # PA1 ADC 采样与 MQ135 浓度换算
 ├── dht11/                         # DHT11 温湿度驱动
 ├── Esp8266/                       # USART1 AT指令、Wi-Fi、TCP和下行消息解析
 ├── OLED/                          # OLED 驱动
@@ -308,9 +335,46 @@ macOS 预设生成器是 `Unix Makefiles`，因此需要 `make`；Windows 命令
 └── 字模提取PCtoLCD2002/          # Windows 字模提取工具及配置示例
 ```
 
+## 本地逻辑与主机测试
+
+`hardware/core/` 下的三个模块不依赖 STM32、GPIO 或任何驱动，只做数值到决策的转换。所有安全关键判断（阈值边界、突增判定、传感器故障、静音优先级、页面内容）都在这里，因此可以在主机上完整测试，不需要开发板在桌上。
+
+主机测试是独立的 CMake 工程，使用主机编译器；固件仍由交叉编译器构建，两者共用同一份 `core/` 源码。
+
+```sh
+cmake -S hardware/tests -B hardware/build/host-tests
+cmake --build hardware/build/host-tests
+./hardware/build/host-tests/host_tests
+```
+
+行覆盖率（阈值 80%，低于阈值脚本以非零码退出）：
+
+```sh
+cmake -S hardware/tests -B hardware/build/host-tests-coverage -DENABLE_COVERAGE=ON
+cmake --build hardware/build/host-tests-coverage
+./hardware/scripts/host_coverage.sh hardware/build/host-tests-coverage
+```
+
+该脚本使用 clang 的 profile 格式与 `llvm-profdata`/`llvm-cov`：macOS 上 clang 写出的文件名是 `<name>.c.gcno`，而 `gcov` 查找 `<name>.gcno`，因此 `--coverage` + gcov 无法读取自己产生的数据。
+
+最新一次本机结果（macOS / Apple clang）：`core/` 三个模块合计 **96% 行覆盖、92% 分支覆盖**，286 项断言全部通过。
+
+**主机测试不能替代实机验证。** 它证明的是判断逻辑本身正确，不能证明 DHT11 时序、MQ135 预热与标定、OLED 刷新、ESP8266 连接或电气连接在现场可用。见下文「已知限制」。
+
 ## Keil 工程说明
 
 `STM32_Project1/Project.uvprojx` 是仓库中保留的旧 Keil 工程文件，但当前其源文件组为空，未完整登记现有代码。因此，Windows 下也建议使用上述 CMake + Arm GNU Toolchain 流程。若需使用 Keil µVision，应先重建工程分组、源文件、头文件路径、预处理宏和启动文件，不应直接依赖该文件构建当前固件。
+
+## 已知限制与待验证项
+
+以下内容**尚未**在真实硬件上验证，不得按已验证对待：
+
+1. **未烧录、未上电验证。** 本仓库当前只有交叉编译成功与主机单元测试的结果。DHT11 时序、MQ135 预热曲线、OLED 刷新、ESP8266 连接都需要在开发板上复现。
+2. **气体估算未标定。** `MQ135_EstimatePpm` 使用 `RL=1 kΩ`、`Ro=10 kΩ` 与简化拟合曲线的示例常数，`116.30 / ratio²` 只是近似。在完成预热、负载电阻确认与标准气体标定之前，`gasPpm` 只能作为相对指标，上位机应以 `gasCalibrated=false` 与 ADC 分级呈现。阈值 20 ppm 也只是一个相对限值。
+3. **ESP8266 重连仍是阻塞的。** `ESP8266_Init` 与 `ESP8266_WaitFor` 最长可等待数秒，期间主循环不会前进，本地采样会被推迟最多数秒。报警输出（LED/蜂鸣器）是 GPIO 保持状态，因此已有报警不会中断；但**新的**报警最多会被推迟这几秒。把网络状态机改为由节拍驱动的非阻塞实现属于 SHIXUN-8 的范围，在此之前不得声称「断网自治」已完全达成。
+4. **Wi-Fi 与服务器配置**依赖本机 `Esp8266/esp8266_config.local.h`。缺少该文件时固件使用不可联网的占位值，只保证可编译。
+5. **阈值和突增参数未现场整定。** 默认值来自实施方案文档，尚未在真实环境中统计误报与漏报。
+6. **页面文字为英文。** 现有字模资源包含中文字模，但轮播页面使用 16 字符宽的 ASCII 行；改为中文需要按宽度重新排版并核验字模覆盖范围。
 
 ## Reuse Assessment
 
@@ -318,7 +382,7 @@ macOS 预设生成器是 `Unix Makefiles`，因此需要 `make`；Windows 命令
 
 ### Inventory
 
-- 自研/项目源码：`STM32_Project1/main.c`，ADC/MQ135、DHT11、ESP8266、OLED、LED/蜂鸣器、按键/输入和 delay 模块。
+- 自研/项目源码：`STM32_Project1/main.c`，`core/`（env_monitor、display_model、text_format）、`tests/`（主机单元测试），以及 ADC/MQ135、DHT11、ESP8266、OLED、LED/蜂鸣器、按键/输入和 delay 模块。
 - 平台依赖：STM32F10x Standard Peripheral Library、CMSIS/启动文件和 STM32F103C8 链接脚本。
 - 构建配置：CMake 工程、Debug/Release presets、Arm GNU Toolchain 文件，以及一个未完整登记源码的旧 Keil 工程。
 - 文档与资源：本 README、`BUILDING.md`、OLED 字模数据，以及随项目保存的 Windows 字模提取工具和配置。
@@ -329,7 +393,7 @@ macOS 预设生成器是 `Unix Makefiles`，因此需要 `make`；Windows 命令
 - STM32F103C8 启动文件、链接脚本、Standard Peripheral Library 与 CMake 编译目标。
 - DHT11 读取、超时与校验和处理。
 - OLED SSD1306 软件 I²C 驱动、显示缓存和字模资源。
-- LED 与蜂鸣器驱动、1 秒采样主循环和阈值报警流程。
+- LED 与蜂鸣器驱动，以及按节拍分频的主循环。原有「1 秒循环 + 三阈值比较」已由 `core/env_monitor` 取代：判定逻辑被抽出为纯函数，新增滤波、突增判断与传感器故障处理，并可在主机上测试。
 - USART1/ESP8266 AT 通信、TCP 连接、断线状态处理及 `+IPD` 下行文本解析，可作为后续联调基础。
 - 已有 HEX/BIN 可用于追溯历史结果，但重新烧录前应从当前源码重新构建。
 

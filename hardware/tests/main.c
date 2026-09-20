@@ -1,0 +1,24 @@
+/*
+ * Host test runner for the pure firmware logic.
+ *
+ * It is a separate CMake project from the firmware so that it builds with the
+ * host compiler: the firmware is cross-compiled for a Cortex-M3 with no libc,
+ * which cannot run the assertions. Keeping the two apart also means the firmware
+ * build stays exactly what is flashed.
+ */
+
+#include "test_support.h"
+
+/* Suites, one per module under test. Add the new suite here when a module is
+ * added to hardware/core. */
+void test_text_format_suite(void);
+void test_env_monitor_suite(void);
+void test_display_model_suite(void);
+
+int main(void)
+{
+    test_run_suite("text_format", test_text_format_suite);
+    test_run_suite("env_monitor", test_env_monitor_suite);
+    test_run_suite("display_model", test_display_model_suite);
+    return test_finish();
+}

@@ -22,6 +22,9 @@ add_executable(${PROJECT_NAME}
     STM32_Project1/User/stm32f10x_it.c
     STM32_Project1/System/delay/delay.c
     ADC/adc.c
+    core/text_format.c
+    core/env_monitor.c
+    core/display_model.c
     dht11/dht11.c
     Esp8266/esp8266.c
     LED/led.c
@@ -42,6 +45,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     STM32_Project1/Library
     STM32_Project1/System/delay
     ADC
+    core
     dht11
     Esp8266
     LED
