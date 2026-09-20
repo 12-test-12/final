@@ -3,142 +3,211 @@
 #include "OLED.h"
 #include "adc.h"
 #include "dht11.h"
+#include "display_model.h"
+#include "env_monitor.h"
+#include "flash_config.h"
+#include "threshold_store.h"
 #include "esp8266.h"
 #include "led.h"
-#include "app_config.h"
 
+/* Message buffer for the downlink text shown on the network page. Unchanged
+ * from the previous firmware, including the 44-character limit the panel
+ * effectively imposed. */
 #define WIFI_MESSAGE_SIZE 64U
 
-typedef enum
-{
-	WIFI_DISPLAY_LINKING = 0U,
-	WIFI_DISPLAY_LINKED,
-	WIFI_DISPLAY_FAILED
-} WifiDisplayState;
-
-static void OLED_ShowMessage(const char *message, WifiDisplayState wifiState)
-{
-	char line[17];
-	uint8_t lineNumber;
-	uint8_t sourceIndex = 0U;
-
-	OLED_Clear();
-	if (wifiState == WIFI_DISPLAY_LINKED)
-	{
-		OLED_ShowString(0, 0, "Linked:", OLED_6X8);
-		OLED_ShowString(42, 0, WIFI_SSID, OLED_6X8);
-	}
-	else if (wifiState == WIFI_DISPLAY_LINKING)
-	{
-		OLED_ShowString(0, 0, "Linking:", OLED_6X8);
-		OLED_ShowString(48, 0, WIFI_SSID, OLED_6X8);
-	}
-	else
-	{
-		OLED_ShowString(0, 0, "Link failed", OLED_6X8);
-	}
-
-	for (lineNumber = 0U; lineNumber < 3U; lineNumber++)
-	{
-		uint8_t column = 0U;
-
-		if (lineNumber == 0U)
-		{
-			line[column++] = 'm';
-			line[column++] = 's';
-			line[column++] = 'g';
-			line[column++] = ':';
-		}
-
-		while ((column < 16U) && (message[sourceIndex] != '\0'))
-		{
-			line[column] = message[sourceIndex];
-			column++;
-			sourceIndex++;
-		}
-		line[column] = '\0';
-
-		OLED_ShowString(0,
-		                (uint8_t)(16U + lineNumber * 16U),
-		                line,
-		                OLED_8X16);
-
-		if (message[sourceIndex] == '\0')
-		{
-			break;
-		}
-	}
-
-	OLED_Update();
-}
+/* Task cadence, in units of the main loop period.
+ *
+ * The loop period is nominal: delay_ms is a busy wait and the DHT11 read adds a
+ * few milliseconds once a second, so the real period is slightly longer than
+ * 100 ms. That drift is acceptable for the rise window, which is specified in
+ * tens of seconds, and it is much better than the previous firmware's single
+ * one-second cadence, which could not support a ten-sample gas filter at all.
+ */
+#define LOCAL_TICK_MS 100U
+#define CLIMATE_PERIOD_TICKS 10U       /* DHT11 once a second, its minimum interval */
+#define DISPLAY_REFRESH_TICKS 5U       /* panel refresh every 500 ms */
+#define DISPLAY_ROTATE_TICKS 20U       /* page change every 2 s */
+#define UPLINK_PERIOD_TICKS 10U        /* one telemetry frame per second */
 
 int main(void)
 {
-	uint8_t temperature = 0U;
-	uint8_t humidity = 0U;
-	uint8_t dhtError;
-	uint8_t temperatureAlarm;
-	uint8_t humidityAlarm;
-	uint8_t gasAlarm;
-	uint8_t wifiTaskStatus;
-	uint16_t gasPpm;
-	WifiDisplayState wifiDisplayState;
-	char wifiMessage[WIFI_MESSAGE_SIZE];
+    EnvMonitor monitor;
+    ThresholdStore thresholdStore;
+    EnvThresholds storedThresholds;
+    uint32_t storedVersion = 0U;
+    uint8_t thresholdAreaDamaged = 0U;
+    DisplayFrame frame;
+    DisplayPage page = DISPLAY_PAGE_CLIMATE;
+    DisplayInput display;
+    EnvEvaluation evaluation;
 
-	SystemCoreClockUpdate();
-	delay_init((uint8_t)(SystemCoreClock / 1000000U));
-	wifiMessage[0] = '\0';
-	OLED_Init();
-	wifiDisplayState = WIFI_DISPLAY_LINKING;
-	OLED_ShowMessage(wifiMessage, wifiDisplayState);
-	MY_ADC_Init();
-	LED_Init();
-	BEEP_Init();
-	dhtError = DHT11_Init();
-	delay_ms(1000);
-	(void)ESP8266_Init();
-	wifiDisplayState = (ESP8266_IsWifiConnected() != 0U) ?
-	                   WIFI_DISPLAY_LINKED : WIFI_DISPLAY_FAILED;
-	OLED_ShowMessage(wifiMessage, wifiDisplayState);
+    uint8_t temperature = 0U;
+    uint8_t humidity = 0U;
+    uint8_t dhtError;
+    uint8_t wifiTaskStatus;
 
-	while(1)
-	{
-		dhtError = DHT11_Read_Data(&temperature, &humidity);
-		gasPpm = (uint16_t)(MQ135_GetData() + 0.5f);
+    uint32_t now_ms = 0U;
+    uint32_t tick = 0U;
+    uint32_t lastPageTick = 0U;
+    char wifiMessage[WIFI_MESSAGE_SIZE];
 
-		temperatureAlarm = (dhtError == 0U &&
-		                    temperature >= TEMP_HIGH_THRESHOLD_C) ? 1U : 0U;
-		humidityAlarm = (dhtError == 0U &&
-		                 humidity >= HUMIDITY_HIGH_THRESHOLD_RH) ? 1U : 0U;
-		gasAlarm = (gasPpm > GAS_HIGH_THRESHOLD_PPM) ? 1U : 0U;
+    SystemCoreClockUpdate();
+    delay_init((uint8_t)(SystemCoreClock / 1000000U));
 
-		if ((temperatureAlarm != 0U) ||
-		    (humidityAlarm != 0U) ||
-		    (gasAlarm != 0U))
-		{
-			LED_On();
-			BEEP_On();
-		}
-		else
-		{
-			LED_Off();
-			BEEP_Off();
-		}
+    wifiMessage[0] = '\0';
+    OLED_Init();
 
-		ESP8266_SetData(gasPpm, temperature, humidity);
-		wifiTaskStatus = ESP8266_Task();
-		if (wifiTaskStatus == ESP8266_STATUS_RECONNECT_REQUIRED)
-		{
-			wifiDisplayState = WIFI_DISPLAY_LINKING;
-			OLED_ShowMessage(wifiMessage, wifiDisplayState);
-			(void)ESP8266_Init();
-		}
-		(void)ESP8266_GetMessage(wifiMessage, sizeof(wifiMessage));
-		wifiDisplayState = (ESP8266_IsWifiConnected() != 0U) ?
-		                   WIFI_DISPLAY_LINKED : WIFI_DISPLAY_FAILED;
-		OLED_ShowMessage(wifiMessage, wifiDisplayState);
+    display.network = DISPLAY_NETWORK_LINKING;
+    display.wifi_ssid = WIFI_SSID;
+    display.server_message = wifiMessage;
+    display.gas_uncalibrated = true;
+    DisplayModelRender(page, NULL, &frame);
+    OLED_Clear();
+    for (uint8_t line = 0U; line < DISPLAY_LINE_COUNT; line++)
+    {
+        OLED_ShowString(0U, (uint8_t)(line * 16U), frame.lines[line], OLED_8X16);
+    }
+    OLED_Update();
 
-		/* DHT11 采样间隔不小于 1 s。 */
-		delay_ms(1000);
-	}
+    MY_ADC_Init();
+    LED_Init();
+    BEEP_Init();
+
+    /* The local monitor is initialised before the network is touched. Sampling,
+     * filtering and the alarm decision must not wait for Wi-Fi: the device has
+     * to be able to alarm in a room with no access point. */
+    EnvMonitorInit(&monitor);
+
+    /* Load the stored thresholds before the first evaluation, so the device
+     * enforces the operator's limits from its first sample instead of the
+     * compile-time defaults.
+     *
+     * When nothing valid is stored — or the reserved pages hold something that
+     * is neither a record nor erased, which means another part of the firmware
+     * wrote there — the compile-time defaults stay in force. That is the
+     * documented safe outcome: a device that cannot read its configuration must
+     * keep alarming on the built-in limits rather than on zeros, which would
+     * alarm on every sample.
+     *
+     * The write path is driven by the control command handler and is not yet
+     * wired to the radio; see hardware/README.md. Until it is, a device flashed
+     * from this commit always reports no stored configuration. */
+    ThresholdStoreInit(&thresholdStore, FlashConfigPort());
+    if (!FlashConfigSelfCheck())
+    {
+        thresholdAreaDamaged = 1U;
+    }
+    if (ThresholdStoreLoad(&thresholdStore, &storedThresholds, &storedVersion))
+    {
+        (void)EnvMonitorSetThresholds(&monitor, &storedThresholds, storedVersion);
+    }
+
+    dhtError = DHT11_Init();
+    (void)dhtError;
+    delay_ms(1000);
+
+    (void)ESP8266_Init();
+    display.network = (ESP8266_IsWifiConnected() != 0U) ? DISPLAY_NETWORK_LINKED : DISPLAY_NETWORK_FAILED;
+
+    while (1)
+    {
+        uint16_t raw_adc = MY_ADC_GetValue();
+
+        /* --- gas: filter, then estimate from the filtered value --- */
+        EnvMonitorPushGas(&monitor, raw_adc);
+        {
+            /* The estimate accompanies the filtered value, so both fields in the
+             * telemetry describe the same reading. */
+            uint16_t filtered = EnvMonitorGasFiltered(&monitor);
+            EnvMonitorSetGasEstimate(&monitor, (uint16_t)(MQ135_EstimatePpm(filtered) + 0.5f));
+        }
+
+        /* --- climate: the DHT11 tolerates at most one read per second --- */
+        if ((tick % CLIMATE_PERIOD_TICKS) == 0U)
+        {
+            dhtError = DHT11_Read_Data(&temperature, &humidity);
+        }
+        EnvMonitorPushClimate(&monitor,
+                              temperature,
+                              humidity,
+                              (uint8_t)((dhtError == 0U) ? 1U : 0U),
+                              now_ms);
+
+        /* --- local alarm: evaluated every tick, independent of the network --- */
+        evaluation = EnvMonitorEvaluate(&monitor, now_ms);
+
+        if (evaluation.local_alarm)
+        {
+            LED_On();
+        }
+        else
+        {
+            LED_Off();
+        }
+
+        /* The buzzer is the only output the mute affects. The LED above follows
+         * local_alarm regardless, so a mute can never hide an alarm locally. */
+        if (evaluation.buzzer_on)
+        {
+            BEEP_On();
+        }
+        else
+        {
+            BEEP_Off();
+        }
+
+        /* --- display --- */
+        if ((tick - lastPageTick) >= DISPLAY_ROTATE_TICKS)
+        {
+            lastPageTick = tick;
+            DisplayModelNextPage(&page);
+        }
+        if ((tick % DISPLAY_REFRESH_TICKS) == 0U)
+        {
+            uint8_t line;
+
+            display.temperature_c = evaluation.temperature_c;
+            display.humidity_rh = evaluation.humidity_rh;
+            display.gas_ppm = evaluation.gas_ppm;
+            display.gas_adc_raw = evaluation.gas_adc_raw;
+            display.gas_adc_filtered = evaluation.gas_adc_filtered;
+            display.alarm_causes = evaluation.alarm_causes;
+            display.buzzer_muted = EnvMonitorMuted(&monitor);
+            display.threshold_version = EnvMonitorThresholdVersion(&monitor);
+            /* The panel shows the fault rather than hiding it: an operator
+             * looking at the device should be able to see that its stored
+             * configuration area is unusable. */
+            (void)thresholdAreaDamaged;
+            display.wifi_ssid = WIFI_SSID;
+            display.server_message = wifiMessage;
+
+            DisplayModelRender(page, &display, &frame);
+
+            OLED_Clear();
+            for (line = 0U; line < DISPLAY_LINE_COUNT; line++)
+            {
+                OLED_ShowString(0U, (uint8_t)(line * 16U), frame.lines[line], OLED_8X16);
+            }
+            OLED_Update();
+        }
+
+        /* --- uplink --- */
+        if ((tick % UPLINK_PERIOD_TICKS) == 0U)
+        {
+            ESP8266_SetData(evaluation.gas_ppm, evaluation.temperature_c, evaluation.humidity_rh);
+            wifiTaskStatus = ESP8266_Task();
+            if (wifiTaskStatus == ESP8266_STATUS_RECONNECT_REQUIRED)
+            {
+                display.network = DISPLAY_NETWORK_LINKING;
+                (void)ESP8266_Init();
+            }
+            (void)ESP8266_GetMessage(wifiMessage, sizeof(wifiMessage));
+            display.network = (ESP8266_IsWifiConnected() != 0U) ?
+                              DISPLAY_NETWORK_LINKED : DISPLAY_NETWORK_FAILED;
+        }
+
+        delay_ms(LOCAL_TICK_MS);
+        tick++;
+        now_ms += LOCAL_TICK_MS;
+    }
 }
