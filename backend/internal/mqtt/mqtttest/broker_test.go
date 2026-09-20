@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -86,6 +87,50 @@ func TestStartAndClose(t *testing.T) {
 	}
 	if err := broker.Close(); err != nil {
 		t.Fatalf("a second close returned %v, want nil", err)
+	}
+}
+
+// TestCloseWhileAcceptingSilentPeers exercises the race between Accept and
+// Close. A peer that never sends CONNECT must not keep Broker.Close blocked.
+func TestCloseWhileAcceptingSilentPeers(t *testing.T) {
+	for attempt := 0; attempt < 50; attempt++ {
+		broker, err := mqtttest.Start()
+		if err != nil {
+			t.Fatalf("attempt %d: start: %v", attempt, err)
+		}
+		seed, err := net.DialTimeout("tcp", broker.Addr(), testTimeout)
+		if err != nil {
+			t.Fatalf("attempt %d: dial silent peer: %v", attempt, err)
+		}
+
+		closed := make(chan struct{})
+		var peers sync.WaitGroup
+		for index := 0; index < 8; index++ {
+			peers.Add(1)
+			go func() {
+				defer peers.Done()
+				conn, err := net.DialTimeout("tcp", broker.Addr(), testTimeout)
+				if err == nil {
+					defer conn.Close()
+					// Hold the silent connection open through the broker shutdown.
+					<-closed
+				}
+			}()
+		}
+
+		closeDone := make(chan error, 1)
+		go func() { closeDone <- broker.Close() }()
+		select {
+		case err := <-closeDone:
+			if err != nil {
+				t.Fatalf("attempt %d: close: %v", attempt, err)
+			}
+		case <-time.After(testTimeout):
+			t.Fatalf("attempt %d: close blocked on a silent peer", attempt)
+		}
+		close(closed)
+		_ = seed.Close()
+		peers.Wait()
 	}
 }
 

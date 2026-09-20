@@ -156,9 +156,15 @@ func (b *Broker) serve() {
 		if err != nil {
 			return
 		}
-		// The connection is registered before the handler starts so that Close
-		// can release a peer which never sends a CONNECT.
+		// Register under the same lock that Close uses to set closed. Otherwise
+		// an accepted connection can be registered after DropConnections takes
+		// its snapshot, leaving its handler blocked on a silent peer forever.
 		b.mu.Lock()
+		if b.closed {
+			b.mu.Unlock()
+			_ = conn.Close()
+			return
+		}
 		b.conns[conn] = struct{}{}
 		b.mu.Unlock()
 

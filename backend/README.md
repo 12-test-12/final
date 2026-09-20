@@ -35,6 +35,20 @@ go run .
 
 启动日志会对以下情况记录 WARN，因为它们在本地可用但不适合无人值守部署：`AUTH_MODE=none`、使用内存存储、未配置 Broker。
 
+## 在现有 postgres-dev 容器初始化数据库
+
+`database/bootstrap.sql` 包含专用 `lab` 数据库的创建语句，以及与服务内嵌迁移完全一致的完整建表、约束和索引语句。脚本使用 `psql` 的 `\gexec` 与 `\connect`，可重复执行；它不会修改 `postgres-dev` 中其他数据库。执行前请确认容器已启动，并备份需要保留的数据：
+
+```sh
+docker start postgres-dev
+docker exec -i postgres-dev psql -U postgres -d postgres -v ON_ERROR_STOP=1 < backend/database/bootstrap.sql
+docker exec postgres-dev psql -U postgres -d lab -c '\dt'
+```
+
+在仓库根目录运行上述命令。`DATABASE_URL` 指向 `localhost:5432/lab`，密码使用已有 `postgres-dev` 的凭据，不写入仓库。服务启动时仍会执行内嵌的幂等迁移；`internal/store/database_script_test.go` 防止人工脚本与迁移内容漂移。
+
+`pgtmp` 是之前测试使用的独立容器，不是运行依赖。当前已删除该容器；原测试库为空，不能依赖其匿名数据卷作为备份。正式数据请使用 `postgres-dev` 的现有持久化目录并另行定期备份。
+
 ## 质量检查
 
 ```sh
@@ -52,6 +66,8 @@ TEST_DATABASE_URL='postgres://postgres:password@localhost:5432/lab_test?sslmode=
 ```
 
 未设置该变量时套件跳过，因此 CI 必须提供它，否则数据库路径的实际覆盖为零。
+
+内置 MQTT 测试 Broker 的生命周期回归用例可单独运行：`go test -race -count=20 ./internal/mqtt/mqtttest`。它覆盖关闭时并发接入且客户端未发送 CONNECT 的情况，防止测试清理阶段无限等待。
 
 CI 要求可测试代码总行覆盖率 ≥ 80%，新增/修改的核心逻辑目标 ≥ 90%。覆盖率文件 `coverage.out` 是生成物，不提交。
 
