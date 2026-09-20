@@ -59,6 +59,23 @@ jobs:
   backend:
     name: Backend
     runs-on: ubuntu-latest
+    # A disposable CI service, separate from developers' existing postgres-dev.
+    # Without TEST_DATABASE_URL the store integration suite silently skips and
+    # the reported coverage does not include the production persistence path.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: lab_test
+          POSTGRES_PASSWORD: lab_test
+          POSTGRES_DB: lab_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lab_test -d lab_test"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
     defaults:
       run:
         working-directory: backend
@@ -80,6 +97,8 @@ jobs:
 
       - name: Run tests with race detector and coverage
         shell: bash
+        env:
+          TEST_DATABASE_URL: postgres://lab_test:lab_test@localhost:5432/lab_test?sslmode=disable
         run: |
           set -euo pipefail
           go test -race -coverprofile=coverage.out ./...
