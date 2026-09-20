@@ -124,7 +124,7 @@ jobs:
       - name: Install Arm GNU Toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install --yes gcc-arm-none-eabi cmake make
+          sudo apt-get install --yes gcc-arm-none-eabi cmake make clang llvm
 
       - name: Configure firmware
         run: |
@@ -156,7 +156,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cmake -S hardware/tests -B out/hardware-coverage -DENABLE_COVERAGE=ON
+          # Coverage uses Clang source-based instrumentation; the ordinary
+          # host test build above may continue to use the runner's default GCC.
+          cmake -S hardware/tests -B out/hardware-coverage \
+            -DCMAKE_C_COMPILER=clang -DENABLE_COVERAGE=ON
           cmake --build out/hardware-coverage --parallel 2
           ./hardware/scripts/host_coverage.sh out/hardware-coverage \
             | tee -a "$GITHUB_STEP_SUMMARY"

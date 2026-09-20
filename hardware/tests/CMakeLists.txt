@@ -22,7 +22,7 @@ project(hardware_host_tests LANGUAGES C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-option(ENABLE_COVERAGE "Instrument the host tests for gcov line coverage" OFF)
+option(ENABLE_COVERAGE "Instrument the host tests for LLVM source-based line coverage" OFF)
 
 set(CORE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/../core/text_format.c"
@@ -65,6 +65,9 @@ target_include_directories(host_tests PRIVATE
 target_compile_options(host_tests PRIVATE -Wall -Wextra -Werror -Wshadow -Wconversion)
 
 if(ENABLE_COVERAGE)
+    if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "ENABLE_COVERAGE requires Clang and llvm-profdata/llvm-cov")
+    endif()
     # Clang's own profile format rather than --coverage: on macOS the gcov
     # toolchain looks for "<name>.gcno" while clang writes "<name>.c.gcno", so
     # gcov cannot find the data. The profile format is the native path and is
