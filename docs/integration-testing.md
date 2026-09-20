@@ -7,7 +7,7 @@
 | 链路 | 需要什么 | 当前状态 |
 | --- | --- | --- |
 | 模拟设备 → 真实 Broker → Go → 内存库 → REST | 无（进程内 Broker） | **已验证**，见 §3 |
-| 模拟设备 → EMQX → Go → PostgreSQL → REST/WebSocket | EMQX 与 PostgreSQL 镜像 | 手册已就绪，**未在本环境执行**（无网络拉取镜像），见 §4 |
+| 模拟设备 → EMQX → Go → PostgreSQL → REST/WebSocket | EMQX 镜像与现有 `postgres-dev` 容器 | 手册已就绪，**完整链路未执行**，见 §4 |
 | 真实设备 → EMQX → Go → PostgreSQL → REST/WebSocket | 实物开发板 + 上述镜像 | **未执行**，见 §6 |
 | 云端命令 → 设备 ACK | 模拟设备即可 | **已验证**（模拟设备侧），见 §3 |
 | 云端命令 → 真实设备 ACK | 实物开发板 + 固件 MQTT 接线 | **未执行**：固件侧编解码层已实现，但未接到射频上，见 §7 |
@@ -49,8 +49,10 @@ go tool cover -func=coverage.out | tail -1
 PostgreSQL 路径单独启用（需要一个**可被销毁**的数据库，套件会创建并删除自己的 schema）：
 
 ```sh
-docker compose -f deploy/compose.yaml up -d postgres
-TEST_DATABASE_URL='postgres://lab:lab@localhost:5432/lab?sslmode=disable' \
+docker start postgres-dev
+# 先创建单独的可销毁测试数据库；不要把已有业务库作为测试目标。
+docker exec postgres-dev psql -U postgres -d postgres -c 'CREATE DATABASE lab_test'
+TEST_DATABASE_URL='postgres://postgres:<existing-password>@localhost:5432/lab_test?sslmode=disable' \
   go test -race -count=1 ./internal/store/
 ```
 
@@ -59,10 +61,12 @@ TEST_DATABASE_URL='postgres://lab:lab@localhost:5432/lab?sslmode=disable' \
 ## 4. 带 EMQX 与 PostgreSQL 的联调
 
 ```sh
-docker compose -f deploy/compose.yaml up -d
+docker start postgres-dev
+docker exec -i postgres-dev psql -U postgres -d postgres -v ON_ERROR_STOP=1 < backend/database/bootstrap.sql
+docker compose -f deploy/compose.yaml up -d emqx
 ```
 
-该编排提供 EMQX 与 PostgreSQL。`deploy/emqx/acl.conf` 实现契约要求的收发方向隔离：设备只能发布 `device/telemetry` 与 `device/command-ack`、只能订阅 `device/control`；后端相反；其余一律拒绝。
+该编排仅提供 EMQX；数据库复用现有 `postgres-dev`，不再创建第二个 PostgreSQL 容器。`deploy/emqx/acl.conf` 实现契约要求的收发方向隔离：设备只能发布 `device/telemetry` 与 `device/command-ack`、只能订阅 `device/control`；后端相反；其余一律拒绝。
 
 > **该 ACL 文件未在运行中的 EMQX 上执行过。** 编写环境无法拉取镜像，因此其语法必须按部署的 EMQX 版本核对。文件注释里写明了每条规则的意图。
 
@@ -70,7 +74,7 @@ docker compose -f deploy/compose.yaml up -d
 
 ```sh
 cd backend
-DATABASE_URL='postgres://lab:lab@localhost:5432/lab?sslmode=disable' \
+DATABASE_URL='postgres://postgres:<existing-password>@localhost:5432/lab?sslmode=disable' \
 MQTT_BROKER_URL='localhost:1883' \
 MQTT_USERNAME='backend' MQTT_PASSWORD='backend-secret' \
 BACKEND_ADDR=':8080' \

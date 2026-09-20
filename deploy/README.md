@@ -4,12 +4,13 @@ Integration environment for the acceptance run.
 
 | File | Purpose |
 | --- | --- |
-| `compose.yaml` | EMQX and PostgreSQL, for local and CI integration runs |
+| `compose.yaml` | EMQX for local integration runs; PostgreSQL reuses the existing `postgres-dev` container |
 | `emqx/acl.conf` | Broker authorization rules implementing the direction split the device contract requires |
 
-**Nothing here is a production deployment.** The credentials are placeholders for a
-disposable local environment; a real deployment supplies its own through the
-environment, and no checked-in file references them.
+**Nothing here is a production deployment.** The Broker credentials are local
+examples. The database password remains in the existing `postgres-dev` container;
+do not commit it. Initialize `lab` with `backend/database/bootstrap.sql` as
+described in `backend/README.md` before running the integration scenario.
 
 **The EMQX ACL file has not been executed against a running broker.** The image is
 not available in the environment where it was written, so its syntax must be
