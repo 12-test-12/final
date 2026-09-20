@@ -90,7 +90,7 @@ func EncodeControl(cmd domain.Command) ([]byte, error) {
 // field and range checks the firmware must apply.
 func DecodeControl(raw []byte, receivedAt time.Time) (domain.Command, error) {
 	var payload controlPayload
-	if err := decodeStrict(raw, controlKeys, &payload); err != nil {
+	if _, err := decodeStrict(raw, controlKeys, &payload); err != nil {
 		return domain.Command{}, err
 	}
 	if payload.SchemaVersion == nil || payload.IssuedAt == nil || payload.ExpiresAt == nil {
@@ -118,7 +118,7 @@ func DecodeControl(raw []byte, receivedAt time.Time) (domain.Command, error) {
 	switch cmd.Type {
 	case domain.CommandSetMute:
 		var body mutePayload
-		if err := decodeStrict(payload.Payload, keySet("muted"), &body); err != nil {
+		if _, err := decodeStrict(payload.Payload, keySet("muted"), &body); err != nil {
 			return domain.Command{}, err
 		}
 		if body.Muted == nil {
@@ -127,7 +127,7 @@ func DecodeControl(raw []byte, receivedAt time.Time) (domain.Command, error) {
 		cmd.Payload.Muted = body.Muted
 	case domain.CommandSetThresholds:
 		var body thresholdPayload
-		if err := decodeStrict(payload.Payload, keySet("thresholdVersion", "temperatureHighC", "humidityHighRh", "gasHighPpm"), &body); err != nil {
+		if _, err := decodeStrict(payload.Payload, keySet("thresholdVersion", "temperatureHighC", "humidityHighRh", "gasHighPpm"), &body); err != nil {
 			return domain.Command{}, err
 		}
 		if body.ThresholdVersion == nil || body.TemperatureHighC == nil || body.HumidityHighRh == nil || body.GasHighPpm == nil {

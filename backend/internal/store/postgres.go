@@ -58,6 +58,19 @@ func (p *Postgres) Close() { p.pool.Close() }
 // Ping verifies the connection is usable.
 func (p *Postgres) Ping(ctx context.Context) error { return p.pool.Ping(ctx) }
 
+// Exec runs a single administrative statement.
+//
+// It is deliberately not part of the Store interface: business code must go
+// through the typed methods, where the atomicity rules live. Exec exists for
+// schema management in tests and for operator runbooks, where the alternative
+// would be a separate database client.
+func (p *Postgres) Exec(ctx context.Context, statement string) error {
+	if _, err := p.pool.Exec(ctx, statement); err != nil {
+		return fmt.Errorf("store: exec administrative statement: %w", err)
+	}
+	return nil
+}
+
 // Migrate applies the embedded schema. The statements are idempotent, so running
 // them on every start is safe and keeps a fresh deployment from needing a
 // separate migration step.

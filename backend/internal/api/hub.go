@@ -390,11 +390,6 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	if s.cfg.Hub == nil {
-		s.fail(w, r, newAPIError(http.StatusServiceUnavailable, codeNotImplemented,
-			"the realtime stream is not configured on this instance", nil))
-		return
-	}
 	if _, err := s.cfg.Store.Device(r.Context(), deviceID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			s.fail(w, r, newAPIError(http.StatusNotFound, codeDeviceNotFound, "device has never reported valid telemetry", map[string]any{"deviceId": deviceID}))

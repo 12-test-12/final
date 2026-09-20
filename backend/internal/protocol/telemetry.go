@@ -3,7 +3,6 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"time"
 
 	"github.com/BobcGn/final/backend/internal/domain"
@@ -64,41 +63,24 @@ type telemetryPayload struct {
 // an allowlist; an empty value accepts any well-formed deviceId.
 func DecodeTelemetry(raw []byte, expectedDeviceID string, receivedAt time.Time) (domain.Telemetry, error) {
 	var payload telemetryPayload
-	if err := decodeStrict(raw, telemetryKeys, &payload); err != nil {
+	keys, err := decodeStrict(raw, telemetryKeys, &payload)
+	if err != nil {
 		return domain.Telemetry{}, err
 	}
-	if payload.SchemaVersion == nil {
-		return domain.Telemetry{}, newDecodeError(ReasonMissingField, "schemaVersion", errMissing)
+	// Presence is checked against the decoded key set rather than against the
+	// pointer fields, because a field that is present but null and a field that
+	// is absent both unmarshal to a nil pointer. timestamp is required and
+	// nullable, so the distinction matters.
+	if missing := requireKeys(keys, []string{
+		"schemaVersion", "messageType", "deviceId", "bootId", "sequence", "timestamp",
+		"uptimeMs", "temperatureC", "humidityRh", "gasAdcRaw", "gasAdcFiltered",
+		"gasCalibrated", "localAlarm", "alarmCauses", "buzzerMuted", "network",
+		"thresholdVersion", "sensorFault",
+	}); missing != "" {
+		return domain.Telemetry{}, newDecodeError(ReasonMissingField, missing, errMissing)
 	}
 	if err := checkSchemaVersion(*payload.SchemaVersion, payload.MessageType, "telemetry"); err != nil {
 		return domain.Telemetry{}, err
-	}
-
-	missing := []string{}
-	for name, present := range map[string]bool{
-		"deviceId":         payload.DeviceID != "",
-		"bootId":           payload.BootID != "",
-		"sequence":         payload.Sequence != nil,
-		"uptimeMs":         payload.UptimeMs != nil,
-		"temperatureC":     payload.TemperatureC != nil,
-		"humidityRh":       payload.HumidityRh != nil,
-		"gasAdcRaw":        payload.GasAdcRaw != nil,
-		"gasAdcFiltered":   payload.GasAdcFiltered != nil,
-		"gasCalibrated":    payload.GasCalibrated != nil,
-		"localAlarm":       payload.LocalAlarm != nil,
-		"alarmCauses":      payload.AlarmCauses != nil,
-		"buzzerMuted":      payload.BuzzerMuted != nil,
-		"network":          payload.Network != "",
-		"thresholdVersion": payload.ThresholdVersion != nil,
-		"sensorFault":      payload.SensorFault != nil,
-	} {
-		if !present {
-			missing = append(missing, name)
-		}
-	}
-	if len(missing) > 0 {
-		sort.Strings(missing)
-		return domain.Telemetry{}, newDecodeError(ReasonMissingField, missing[0], fmt.Errorf("%d required field(s) are absent: %v", len(missing), missing))
 	}
 
 	if expectedDeviceID != "" && payload.DeviceID != expectedDeviceID {

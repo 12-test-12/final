@@ -211,7 +211,7 @@ func (s *Service) HandleTelemetry(ctx context.Context, raw []byte) error {
 	}
 	state.LastSeenAt = sample.ReceivedAt
 
-	alertEvent, alertChanged, err := s.applyAlertRules(ctx, sample, state)
+	alertEvent, alertChanged, err := s.applyAlertRules(ctx, sample, &state)
 	if err != nil {
 		return err
 	}
@@ -285,8 +285,12 @@ func (s *Service) HandleCommandAck(ctx context.Context, raw []byte) error {
 }
 
 // applyAlertRules runs the composite rule and persists the resulting transition.
-// It updates state in place and returns the alert event to publish, if any.
-func (s *Service) applyAlertRules(ctx context.Context, sample domain.Telemetry, state store.DeviceState) (*domain.AlertEvent, bool, error) {
+//
+// state is a pointer because the alert bookkeeping has to reach the caller: the
+// device snapshot is written once, after the thresholds and alert rules have had
+// their say, and a copy would drop the new active alert id and leave the device
+// permanently pointing at an episode that no longer exists.
+func (s *Service) applyAlertRules(ctx context.Context, sample domain.Telemetry, state *store.DeviceState) (*domain.AlertEvent, bool, error) {
 	var active *domain.AlertEvent
 	if state.ActiveAlertID != "" {
 		event, err := s.store.ActiveAlert(ctx, sample.DeviceID)

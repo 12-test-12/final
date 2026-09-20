@@ -230,11 +230,16 @@ func (e *Engine) Evaluate(input Input) Decision {
 // applyRecovery handles the case where no condition holds. An active alert is
 // held open until every condition has been clear for RecoveryHold, so that a
 // single sample dipping below a threshold cannot end an episode.
+//
+// A device whose episode has already ended stays in recovered rather than
+// decaying to normal. Both states mean "not currently alarming"; the difference
+// is that recovered tells an operator the device has alarmed at some point, and
+// keeping it that way needs no extra timer and cannot flap. normal is for a
+// device with no composite warning in its recorded history.
 func (e *Engine) applyRecovery(window *deviceWindow, input Input, eventTime time.Time, decision Decision) Decision {
 	if input.ActiveAlert == nil {
-		// Nothing open: mirror the previous state, but let a finished episode
-		// decay from recovered back to normal once it is no longer current.
-		if input.CurrentState == domain.AlertRecovered && decision.State == domain.AlertRecovered {
+		if input.CurrentState == domain.AlertRecovered {
+			decision.State = domain.AlertRecovered
 			return decision
 		}
 		decision.State = domain.AlertNormal

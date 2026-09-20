@@ -3,7 +3,6 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"time"
 
 	"github.com/BobcGn/final/backend/internal/domain"
@@ -50,33 +49,21 @@ type CommandAck struct {
 // DecodeCommandAck parses and validates a device/command-ack payload.
 func DecodeCommandAck(raw []byte, expectedDeviceID string, receivedAt time.Time) (CommandAck, error) {
 	var payload ackPayload
-	if err := decodeStrict(raw, ackKeys, &payload); err != nil {
+	keys, err := decodeStrict(raw, ackKeys, &payload)
+	if err != nil {
 		return CommandAck{}, err
 	}
-	if payload.SchemaVersion == nil {
-		return CommandAck{}, newDecodeError(ReasonMissingField, "schemaVersion", errMissing)
+	// errorCode is required but nullable, so its key must be present even when
+	// its value is null. Checking the decoded key set is the only way to tell
+	// "explicitly null" from "field omitted".
+	if missing := requireKeys(keys, []string{
+		"schemaVersion", "messageType", "deviceId", "bootId", "sequence", "timestamp",
+		"uptimeMs", "requestId", "status", "thresholdVersion", "errorCode",
+	}); missing != "" {
+		return CommandAck{}, newDecodeError(ReasonMissingField, missing, errMissing)
 	}
 	if err := checkSchemaVersion(*payload.SchemaVersion, payload.MessageType, "command_ack"); err != nil {
 		return CommandAck{}, err
-	}
-
-	missing := []string{}
-	for name, present := range map[string]bool{
-		"deviceId":  payload.DeviceID != "",
-		"bootId":    payload.BootID != "",
-		"sequence":  payload.Sequence != nil,
-		"uptimeMs":  payload.UptimeMs != nil,
-		"requestId": payload.RequestID != "",
-		"status":    payload.Status != "",
-		"errorCode": payload.ErrorCode != nil,
-	} {
-		if !present {
-			missing = append(missing, name)
-		}
-	}
-	if len(missing) > 0 {
-		sort.Strings(missing)
-		return CommandAck{}, newDecodeError(ReasonMissingField, missing[0], fmt.Errorf("%d required field(s) are absent: %v", len(missing), missing))
 	}
 
 	if expectedDeviceID != "" && payload.DeviceID != expectedDeviceID {

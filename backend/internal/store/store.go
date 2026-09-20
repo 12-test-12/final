@@ -251,9 +251,9 @@ func NormalizeOrder(order Order) Order {
 	return OrderAsc
 }
 
-// NewID returns a time-ordered identifier built from the current time and a
-// per-call counter. It is used for alert and command identifiers, where
-// lexicographic ordering by creation time keeps cursors stable.
+// NewID returns a time-ordered identifier for an alert or a command. Sorting the
+// identifiers as strings reproduces creation order, which is what keeps cursor
+// pagination stable when several records share a timestamp.
 func NewID(now time.Time) string {
-	return newULID(now, nextMonotonic())
+	return newID(now)
 }

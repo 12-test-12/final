@@ -36,6 +36,18 @@ func (t Type) Valid() bool {
 	}
 }
 
+// Types returns every frozen event type, sorted. The contract test compares this
+// with the type enum in docs/api/openapi.yaml.
+func Types() []Type {
+	return []Type{
+		TypeAlertStateChanged,
+		TypeCommandStatusChanged,
+		TypeDeviceStatusChanged,
+		TypeTelemetryUpdated,
+		TypeThresholdsConfirmed,
+	}
+}
+
 // Envelope is the JSON message the server sends on the realtime stream.
 //
 // Data carries the event-specific body. It is typed as any so that the envelope

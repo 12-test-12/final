@@ -216,14 +216,19 @@ func (c *Client) session(ctx context.Context) error {
 	if err := c.handshake(conn); err != nil {
 		return err
 	}
+
+	// The subscription is established before the session is reported connected.
+	// Connected is what a caller checks before publishing a control command or
+	// expecting telemetry to flow, so it must mean "ready", not "the CONNECT was
+	// acknowledged": a session that reports connected while its subscription is
+	// still in flight drops every message published in that window.
+	if err := c.subscribe(conn); err != nil {
+		return err
+	}
 	c.setState(conn, true)
 	defer c.setState(nil, false)
 	c.cfg.Logger.LogAttrs(ctx, slog.LevelInfo, "mqtt connected",
 		slog.String("address", c.cfg.Address), slog.String("client_id", c.cfg.ClientID))
-
-	if err := c.subscribe(conn); err != nil {
-		return err
-	}
 
 	// The ping goroutine is stopped before the connection is closed by the
 	// deferred Close above, so a ping cannot outlive its socket.
@@ -231,15 +236,24 @@ func (c *Client) session(ctx context.Context) error {
 	defer stopPing()
 	go c.pingLoop(pingCtx, conn)
 
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
+	// A blocking socket read cannot observe a context, so cancellation has to
+	// close the socket to unblock it. Without this the client would keep serving
+	// a cancelled context until the read deadline expired, which is twice the
+	// keep-alive interval — long enough for a shutdown to look hung.
+	watchDone := make(chan struct{})
+	defer close(watchDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-watchDone:
 		}
-		if err := c.readLoop(ctx, conn); err != nil {
-			return err
-		}
-		return nil
+	}()
+
+	if err := c.readLoop(ctx, conn); err != nil {
+		return err
 	}
+	return nil
 }
 
 // handshake sends CONNECT and verifies the CONNACK return code.

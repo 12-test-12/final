@@ -72,36 +72,85 @@ func newDecodeError(reason, field string, err error) *DecodeError {
 }
 
 // decodeStrict unmarshals exactly one JSON object into dst after checking that
-// every key is declared in allowed.
+// every key is declared in allowed. It returns the decoded key set so that a
+// caller can tell a field that is present but null from a field that is absent:
+// the two are identical once unmarshalled into a pointer, and the frozen
+// contract requires some nullable fields to be present.
 //
 // Unknown keys are detected by comparing the decoded key set against an explicit
 // allowlist rather than by relying on json.Decoder.DisallowUnknownFields, whose
 // error carries no machine-readable type and would have to be matched by
 // message text.
-func decodeStrict(raw []byte, allowed map[string]struct{}, dst any) *DecodeError {
+func decodeStrict(raw []byte, allowed map[string]struct{}, dst any) (map[string]json.RawMessage, *DecodeError) {
 	if len(raw) > MaxPayloadBytes {
-		return newDecodeError(ReasonTooLarge, "", fmt.Errorf("payload is %d bytes, limit is %d", len(raw), MaxPayloadBytes))
+		return nil, newDecodeError(ReasonTooLarge, "", fmt.Errorf("payload is %d bytes, limit is %d", len(raw), MaxPayloadBytes))
+	}
+
+	// A payload must be a JSON object. Checking the first significant byte keeps
+	// a top-level array or scalar classified as malformed rather than as a range
+	// problem, which is what the type error would otherwise look like.
+	if first := firstSignificantByte(raw); first != '{' {
+		return nil, newDecodeError(ReasonMalformedJSON, "",
+			fmt.Errorf("payload must be a JSON object, found %s", describeFirstByte(first)))
 	}
 
 	var keys map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &keys); err != nil {
 		var typeErr *json.UnmarshalTypeError
 		if errors.As(err, &typeErr) {
-			return newDecodeError(ReasonOutOfRange, typeErr.Field, err)
+			return nil, newDecodeError(ReasonOutOfRange, typeErr.Field, err)
 		}
-		return newDecodeError(ReasonMalformedJSON, "", err)
+		return nil, newDecodeError(ReasonMalformedJSON, "", err)
 	}
 	if unknown := firstUnknownKey(keys, allowed); unknown != "" {
-		return newDecodeError(ReasonUnknownField, unknown, fmt.Errorf("field %q is not part of the frozen payload", unknown))
+		return nil, newDecodeError(ReasonUnknownField, unknown, fmt.Errorf("field %q is not part of the frozen payload", unknown))
 	}
 	if err := json.Unmarshal(raw, dst); err != nil {
 		var typeErr *json.UnmarshalTypeError
 		if errors.As(err, &typeErr) {
-			return newDecodeError(ReasonOutOfRange, typeErr.Field, err)
+			return nil, newDecodeError(ReasonOutOfRange, typeErr.Field, err)
 		}
-		return newDecodeError(ReasonMalformedJSON, "", err)
+		return nil, newDecodeError(ReasonMalformedJSON, "", err)
 	}
-	return nil
+	return keys, nil
+}
+
+// firstSignificantByte returns the first byte that is not JSON whitespace, or 0
+// when the payload is empty or whitespace only.
+func firstSignificantByte(raw []byte) byte {
+	for _, b := range raw {
+		switch b {
+		case ' ', '\t', '\r', '\n':
+			continue
+		default:
+			return b
+		}
+	}
+	return 0
+}
+
+// describeFirstByte names a byte for an error message.
+func describeFirstByte(b byte) string {
+	if b == 0 {
+		return "no content"
+	}
+	return fmt.Sprintf("%q", string(b))
+}
+
+// requireKeys reports the first absent required key, or "" when all are present.
+// Sort order makes the reported field deterministic across runs.
+func requireKeys(keys map[string]json.RawMessage, required []string) string {
+	missing := make([]string, 0, len(required))
+	for _, name := range required {
+		if _, ok := keys[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	sort.Strings(missing)
+	return missing[0]
 }
 
 // firstUnknownKey returns the lexicographically first key of keys that is absent

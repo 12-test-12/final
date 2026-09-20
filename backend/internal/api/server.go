@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -38,8 +39,22 @@ const (
 	codeInternalError     = "internal_error"
 	codeBrokerUnavailable = "broker_unavailable"
 	codeDeviceAckTimeout  = "device_ack_timeout"
-	codeNotImplemented    = "not_implemented"
 )
+
+// FrozenErrorCodes returns every error code the API may return, sorted. The
+// contract test compares this with the ErrorCode enum in
+// docs/api/openapi.yaml; a code that exists in only one of the two places is a
+// contract defect.
+func FrozenErrorCodes() []string {
+	codes := []string{
+		codeBrokerUnavailable, codeCommandNotFound, codeDeviceAckTimeout,
+		codeDeviceNotFound, codeForbidden, codeInternalError, codeInvalidRequest,
+		codeInvalidThreshold, codeRateLimited, codeUnauthenticated,
+		codeVersionConflict,
+	}
+	sort.Strings(codes)
+	return codes
+}
 
 // AuthMode selects how requests are authenticated.
 type AuthMode string
@@ -110,6 +125,9 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 	if cfg.Tracker == nil {
 		return nil, errors.New("api: liveness tracker is required")
+	}
+	if cfg.Hub == nil {
+		return nil, errors.New("api: realtime hub is required")
 	}
 	logger := cfg.Logger
 	if logger == nil {

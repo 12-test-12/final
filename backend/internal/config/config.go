@@ -65,18 +65,20 @@ type Config struct {
 // Load reads and validates the configuration from the process environment.
 func Load() (Config, error) {
 	cfg := Config{
-		Addr:                envString("BACKEND_ADDR", ":8080"),
-		DatabaseURL:         strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		BrokerURL:           strings.TrimSpace(os.Getenv("MQTT_BROKER_URL")),
-		BrokerUser:          os.Getenv("MQTT_USERNAME"),
-		BrokerPass:          os.Getenv("MQTT_PASSWORD"),
-		MQTTClientID:        envString("MQTT_CLIENT_ID", "lab-backend"),
-		Alert:               alert.DefaultConfig(),
-		AuthMode:            envString("AUTH_MODE", "none"),
-		MaxWebSocketClients: envInt("MAX_WS_CLIENTS", 128),
+		Addr:         envString("BACKEND_ADDR", ":8080"),
+		DatabaseURL:  strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		BrokerURL:    strings.TrimSpace(os.Getenv("MQTT_BROKER_URL")),
+		BrokerUser:   os.Getenv("MQTT_USERNAME"),
+		BrokerPass:   os.Getenv("MQTT_PASSWORD"),
+		MQTTClientID: envString("MQTT_CLIENT_ID", "lab-backend"),
+		Alert:        alert.DefaultConfig(),
+		AuthMode:     envString("AUTH_MODE", "none"),
 	}
 
 	var err error
+	if cfg.MaxWebSocketClients, err = envIntErr("MAX_WS_CLIENTS", 128); err != nil {
+		return Config{}, err
+	}
 	if cfg.BrokerTLS, err = envBool("MQTT_TLS", false); err != nil {
 		return Config{}, err
 	}
@@ -179,7 +181,7 @@ func (c Config) Redacted() map[string]any {
 		"addr":                  c.Addr,
 		"database":              describePresence(c.DatabaseURL != ""),
 		"broker":                describePresence(c.BrokerURL != ""),
-		"broker_url":            c.BrokerURL,
+		"broker_url":            redactUserInfo(c.BrokerURL),
 		"broker_tls":            c.BrokerTLS,
 		"broker_credentials":    describePresence(c.BrokerUser != "" || c.BrokerPass != ""),
 		"mqtt_client_id":        c.MQTTClientID,
@@ -192,6 +194,16 @@ func (c Config) Redacted() map[string]any {
 		"alert_min_samples":     c.Alert.MinSamples,
 		"log_level":             c.LogLevel.String(),
 	}
+}
+
+// redactUserInfo removes any credentials embedded in a URL-shaped value. A
+// broker URL is not secret by itself, but `user:password@host` inside one is.
+func redactUserInfo(raw string) string {
+	at := strings.LastIndex(raw, "@")
+	if at < 0 {
+		return raw
+	}
+	return "***@" + raw[at+1:]
 }
 
 // describePresence reports whether a secret is configured without revealing it.
@@ -210,16 +222,9 @@ func envString(key, fallback string) string {
 	return fallback
 }
 
-// envInt reads an integer variable with a default.
-func envInt(key string, fallback int) int {
-	value, err := envIntErr(key, fallback)
-	if err != nil {
-		return fallback
-	}
-	return value
-}
-
-// envIntErr reads an integer variable, reporting a malformed value.
+// envIntErr reads an integer variable, reporting a malformed value rather than
+// falling back to a default: a typo in a numeric setting must not silently change
+// behaviour.
 func envIntErr(key string, fallback int) (int, error) {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {

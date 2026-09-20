@@ -226,9 +226,17 @@ func CanTransition(from, to CommandState) bool {
 			return false
 		}
 	case CommandPublished:
-		// A device acknowledgement for a command we published, or the backend
-		// giving up on an unanswered one.
-		return to.Terminal()
+		// A published command can only end: either the device answers, or the
+		// backend gives up on it. publish_failed is deliberately unreachable from
+		// here, because the publish already succeeded and rewriting that would
+		// record a failure that never happened.
+		switch to {
+		case CommandApplied, CommandRejected, CommandExpired, CommandDuplicate,
+			CommandFailed, CommandTimedOut:
+			return true
+		default:
+			return false
+		}
 	default:
 		return false
 	}

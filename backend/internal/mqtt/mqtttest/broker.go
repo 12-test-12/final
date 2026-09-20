@@ -45,6 +45,7 @@ type Broker struct {
 	RejectSubscriptions bool
 
 	mu       sync.Mutex
+	conns    map[net.Conn]struct{}
 	sessions map[*session]struct{}
 	observed []Message
 	closed   bool
@@ -72,7 +73,11 @@ func Start() (*Broker, error) {
 	if err != nil {
 		return nil, err
 	}
-	broker := &Broker{listener: listener, sessions: make(map[*session]struct{})}
+	broker := &Broker{
+		listener: listener,
+		conns:    make(map[net.Conn]struct{}),
+		sessions: make(map[*session]struct{}),
+	}
 	broker.wg.Add(1)
 	go broker.serve()
 	return broker, nil
@@ -104,19 +109,25 @@ func (b *Broker) ObservedOn(topic string) []Message {
 	return matched
 }
 
-// DropConnections closes every live client connection, simulating a broker
-// restart from the client's point of view. The listener stays up so clients can
+// DropConnections closes every accepted connection, simulating a broker restart
+// from the client's point of view. The listener stays up so clients can
 // reconnect.
+//
+// Every accepted connection is closed, not only the ones that completed their
+// handshake. A peer that connects and then says nothing is a real scenario — a
+// port scanner, a crashed client, a test that only checks the port is open — and
+// leaving it open would block Close forever, because the handler goroutine would
+// still be reading.
 func (b *Broker) DropConnections() {
 	b.mu.Lock()
-	sessions := make([]*session, 0, len(b.sessions))
-	for current := range b.sessions {
-		sessions = append(sessions, current)
+	connections := make([]net.Conn, 0, len(b.conns))
+	for conn := range b.conns {
+		connections = append(connections, conn)
 	}
 	b.mu.Unlock()
 
-	for _, current := range sessions {
-		_ = current.conn.Close()
+	for _, conn := range connections {
+		_ = conn.Close()
 	}
 }
 
@@ -145,6 +156,12 @@ func (b *Broker) serve() {
 		if err != nil {
 			return
 		}
+		// The connection is registered before the handler starts so that Close
+		// can release a peer which never sends a CONNECT.
+		b.mu.Lock()
+		b.conns[conn] = struct{}{}
+		b.mu.Unlock()
+
 		b.wg.Add(1)
 		go func() {
 			defer b.wg.Done()
@@ -159,6 +176,7 @@ func (b *Broker) handle(conn net.Conn) {
 	defer func() {
 		b.mu.Lock()
 		delete(b.sessions, current)
+		delete(b.conns, conn)
 		b.mu.Unlock()
 		_ = conn.Close()
 	}()

@@ -151,6 +151,16 @@ func (m *Memory) InsertAlert(_ context.Context, event domain.AlertEvent) (domain
 	if _, err := eventByID(m.alerts[event.DeviceID], event.ID); err == nil {
 		return domain.AlertEvent{}, fmt.Errorf("%w: alert %s already exists", ErrConflict, event.ID)
 	}
+	// At most one open alert per device, matching the partial unique index in the
+	// PostgreSQL schema. Without this the in-memory store would let two episodes
+	// run at once and ActiveAlert would become ambiguous.
+	if event.EndedAt == nil {
+		for _, existing := range m.alerts[event.DeviceID] {
+			if existing.EndedAt == nil {
+				return domain.AlertEvent{}, fmt.Errorf("%w: device %s already has an open alert", ErrConflict, event.DeviceID)
+			}
+		}
+	}
 	m.alerts[event.DeviceID] = append(m.alerts[event.DeviceID], event)
 	return event, nil
 }
