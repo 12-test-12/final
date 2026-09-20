@@ -1,18 +1,32 @@
 openapi: 3.0.3
 info:
   title: Smart Lab Environment Monitoring API
-  version: 0.1.0-draft
+  version: 1.0.0
   description: >-
-    Contract draft for the Go backend. Except for /healthz, routes currently
-    return 501 until storage, MQTT, alert evaluation, and WebSocket delivery
-    are implemented.
+    Frozen REST and WebSocket contract for the Go backend (SHIXUN-3). Route
+    paths, field names, units, enums, error codes and lifecycle semantics are
+    frozen for phase 1. The device-facing MQTT contract lives in
+    device-protocol.md; both must be changed together.
 servers:
   - url: http://localhost:8080
+tags:
+  - name: health
+  - name: device
+  - name: telemetry
+  - name: alerts
+  - name: thresholds
+  - name: commands
+  - name: realtime
 paths:
   /healthz:
     get:
       operationId: getHealth
-      summary: Check process health
+      tags: [health]
+      summary: Check process liveness
+      description: >-
+        Process-level liveness only. It does not check the database, the MQTT
+        broker, or any device, so it still returns 200 while those are down.
+        Readiness, when needed, must be a separate /readyz route.
       responses:
         '200':
           description: Process is running
@@ -23,6 +37,7 @@ paths:
   /api/v1/devices/{deviceId}/status:
     get:
       operationId: getDeviceStatus
+      tags: [device]
       summary: Get the current device and connectivity state
       parameters:
         - $ref: '#/components/parameters/DeviceId'
@@ -33,14 +48,25 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DeviceStatus'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '501':
-          $ref: '#/components/responses/NotImplemented'
+        '429':
+          $ref: '#/components/responses/RateLimited'
   /api/v1/devices/{deviceId}/telemetry/latest:
     get:
       operationId: getLatestTelemetry
+      tags: [telemetry]
       summary: Get the latest valid telemetry sample
+      description: >-
+        Returns the newest sample that passed schema, range and device checks.
+        Returns 404 when the device has no valid telemetry yet; never a
+        zero-filled object.
       parameters:
         - $ref: '#/components/parameters/DeviceId'
       responses:
@@ -50,14 +76,26 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TelemetryPoint'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '501':
-          $ref: '#/components/responses/NotImplemented'
+        '429':
+          $ref: '#/components/responses/RateLimited'
   /api/v1/devices/{deviceId}/telemetry:
     get:
       operationId: listTelemetry
-      summary: Query historical telemetry in ascending event-time order
+      tags: [telemetry]
+      summary: Query historical telemetry
+      description: >-
+        Ascending event-time order is the default. Ordering and the pagination
+        cursor use the stable key (eventTime, bootId, sequence, id) so that
+        equal timestamps cannot skip or duplicate rows. The maximum query span
+        is 31 days; longer ranges need aggregation or an export job.
       parameters:
         - $ref: '#/components/parameters/DeviceId'
         - $ref: '#/components/parameters/From'
@@ -71,21 +109,21 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required: [items]
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/TelemetryPoint'
-                  nextCursor:
-                    type: string
-                    nullable: true
-        '501':
-          $ref: '#/components/responses/NotImplemented'
+                $ref: '#/components/schemas/TelemetryPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
   /api/v1/devices/{deviceId}/alerts:
     get:
       operationId: listAlerts
+      tags: [alerts]
       summary: Query alert events
       parameters:
         - $ref: '#/components/parameters/DeviceId'
@@ -96,10 +134,10 @@ paths:
         - name: state
           in: query
           schema:
-            type: string
-            enum: [suspect, fire_warning, acknowledged, recovered]
+            $ref: '#/components/schemas/AlertState'
         - name: active
           in: query
+          description: Return only events that have not ended
           schema:
             type: boolean
       responses:
@@ -108,22 +146,26 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required: [items]
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/AlertEvent'
-                  nextCursor:
-                    type: string
-                    nullable: true
-        '501':
-          $ref: '#/components/responses/NotImplemented'
+                $ref: '#/components/schemas/AlertPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
   /api/v1/devices/{deviceId}/thresholds:
     get:
       operationId: getThresholds
+      tags: [thresholds]
       summary: Get desired and device-confirmed thresholds
+      description: >-
+        A confirmed version lower than the desired version means the command is
+        still pending, failed, or the device is offline. The API never presents
+        the desired value as if the device had confirmed it.
       parameters:
         - $ref: '#/components/parameters/DeviceId'
       responses:
@@ -133,13 +175,27 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Thresholds'
-        '501':
-          $ref: '#/components/responses/NotImplemented'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
     put:
       operationId: updateThresholds
+      tags: [thresholds]
       summary: Validate and enqueue a threshold update
+      description: >-
+        HTTP 202 means the backend accepted and enqueued the command. It does
+        not mean the device wrote Flash. Clients must wait for the command
+        acknowledgement or the timeout result.
       parameters:
         - $ref: '#/components/parameters/DeviceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -155,15 +211,32 @@ paths:
                 $ref: '#/components/schemas/CommandAccepted'
         '400':
           $ref: '#/components/responses/BadRequest'
-        '501':
-          $ref: '#/components/responses/NotImplemented'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+        '422':
+          $ref: '#/components/responses/InvalidThreshold'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/BrokerUnavailable'
   /api/v1/devices/{deviceId}/commands/mute:
     post:
       operationId: setDeviceMute
+      tags: [commands]
       summary: Enqueue a buzzer mute or unmute command
-      description: Muting never clears the local alarm or disables LED and telemetry reporting.
+      description: >-
+        Muting only suppresses the buzzer. It never clears localAlarm, never
+        disables the LED or OLED indication, and never stops sampling or
+        telemetry reporting.
       parameters:
         - $ref: '#/components/parameters/DeviceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -179,41 +252,123 @@ paths:
                 $ref: '#/components/schemas/CommandAccepted'
         '400':
           $ref: '#/components/responses/BadRequest'
-        '501':
-          $ref: '#/components/responses/NotImplemented'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/BrokerUnavailable'
+  /api/v1/devices/{deviceId}/commands/{requestId}:
+    get:
+      operationId: getCommandStatus
+      tags: [commands]
+      summary: Get the current state of a control command
+      description: >-
+        Closes the control loop for clients that were disconnected when the
+        acknowledgement arrived. Returns the backend-recorded lifecycle state,
+        which may still be pending when the device has not confirmed yet.
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+        - name: requestId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+      responses:
+        '200':
+          description: Command lifecycle state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandStatus'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
   /ws/v1/devices/{deviceId}/telemetry:
     get:
       operationId: streamDeviceTelemetry
-      summary: Upgrade to the per-device telemetry WebSocket stream
+      tags: [realtime]
+      summary: Upgrade to the per-device realtime WebSocket stream
+      description: >-
+        Standard WebSocket upgrade. Authentication failures are reported as an
+        HTTP error before the upgrade. The stream carries incremental events
+        only; it does not replay history, so a reconnecting client must fetch
+        latest or history over REST before resubscribing. Event ids may repeat,
+        so clients deduplicate by eventId.
       x-websocket: true
       parameters:
         - $ref: '#/components/parameters/DeviceId'
       responses:
         '101':
-          description: WebSocket protocol switched; messages use TelemetryPoint JSON
-        '501':
-          $ref: '#/components/responses/NotImplemented'
+          description: WebSocket protocol switched; server sends WsEnvelope JSON
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
 components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: >-
+        Phase-1 placeholder. The backend runs with auth disabled
+        (AUTH_MODE=none) only for local development; control routes must never
+        be exposed publicly without tokens.
   parameters:
     DeviceId:
       name: deviceId
       in: path
       required: true
+      description: Must match the deviceId carried in MQTT payloads
       schema:
         type: string
         pattern: '^[A-Za-z0-9_-]{1,32}$'
       example: MCU001
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >-
+        Repeating the same user, device, route and key with the same payload
+        returns the same command result and never publishes a second command.
+        The same key with a different payload is a 409 version_conflict.
+        Recommended value: UUID or ULID.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 64
+      example: 01K5H0PN0M1N9NB8B7RBTVWT8P
     From:
       name: from
       in: query
-      description: Inclusive RFC 3339 timestamp
+      description: Inclusive RFC 3339 timestamp; defaults to now-1h
       schema:
         type: string
         format: date-time
     To:
       name: to
       in: query
-      description: Exclusive RFC 3339 timestamp
+      description: Exclusive RFC 3339 timestamp; defaults to now
       schema:
         type: string
         format: date-time
@@ -228,7 +383,9 @@ components:
     Cursor:
       name: cursor
       in: query
-      description: Opaque pagination cursor returned by the previous page
+      description: >-
+        Opaque pagination cursor returned by the previous page. When present,
+        from, to and order must match the first page request.
       schema:
         type: string
     Order:
@@ -245,14 +402,44 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
-    NotFound:
-      description: Device or data was not found
+    Unauthenticated:
+      description: Missing or invalid credentials
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
-    NotImplemented:
-      description: Contract exists but implementation is pending
+    Forbidden:
+      description: The caller may not access this device or perform this control action
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    NotFound:
+      description: Device, command or data was not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    VersionConflict:
+      description: Threshold version or idempotency key conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    InvalidThreshold:
+      description: Threshold value or unit is outside the device-supported range
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    RateLimited:
+      description: Too many query or control requests
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    BrokerUnavailable:
+      description: The control command could not be published to the broker
       content:
         application/json:
           schema:
@@ -265,6 +452,21 @@ components:
         status:
           type: string
           enum: [ok]
+    ErrorCode:
+      type: string
+      description: Frozen error code set
+      enum:
+        - invalid_request
+        - unauthenticated
+        - forbidden
+        - device_not_found
+        - command_not_found
+        - version_conflict
+        - invalid_threshold
+        - rate_limited
+        - internal_error
+        - broker_unavailable
+        - device_ack_timeout
     ErrorEnvelope:
       type: object
       required: [error]
@@ -274,7 +476,7 @@ components:
           required: [code, message]
           properties:
             code:
-              type: string
+              $ref: '#/components/schemas/ErrorCode'
             message:
               type: string
             requestId:
@@ -282,6 +484,22 @@ components:
             details:
               type: object
               additionalProperties: true
+    AlarmCause:
+      type: string
+      enum:
+        - temperature_high
+        - humidity_high
+        - gas_high
+        - rapid_temperature_rise
+        - rapid_gas_rise
+        - sensor_fault
+    AlertState:
+      type: string
+      description: >-
+        Phase-1 alert states. An explicit acknowledgement endpoint does not
+        exist yet, so no acknowledged state is emitted; adding one is a phase-2
+        contract change.
+      enum: [normal, suspect, fire_warning, recovered]
     DeviceStatus:
       type: object
       required: [deviceId, connectivity, alarmState, lastSeenAt]
@@ -292,8 +510,7 @@ components:
           type: string
           enum: [online, offline, unknown]
         alarmState:
-          type: string
-          enum: [normal, suspect, fire_warning, acknowledged, recovered]
+          $ref: '#/components/schemas/AlertState'
         buzzerMuted:
           type: boolean
         localAlarm:
@@ -301,10 +518,12 @@ components:
         offlineAfterSeconds:
           type: integer
           minimum: 1
+          description: Consecutive telemetry-silence threshold used for offline detection
         lastSeenAt:
           type: string
           format: date-time
           nullable: true
+          description: Server receive time of the last valid telemetry
         thresholdVersion:
           type: object
           properties:
@@ -328,16 +547,22 @@ components:
       properties:
         deviceId:
           type: string
+        bootId:
+          type: string
+          description: Device-generated token, unique per power cycle
         sequence:
           type: integer
           format: int64
+          description: Monotonic within one bootId
         timestamp:
           type: string
           format: date-time
           nullable: true
+          description: Device event time; null until the device clock is synced
         receivedAt:
           type: string
           format: date-time
+          description: Always filled by the backend
         temperatureC:
           type: number
           format: float
@@ -356,14 +581,33 @@ components:
           type: number
           format: float
           nullable: true
+        gasCalibrated:
+          type: boolean
+          description: False means gasPpm comes from an uncalibrated estimate
         localAlarm:
           type: boolean
         alarmCauses:
           type: array
           items:
-            type: string
+            $ref: '#/components/schemas/AlarmCause'
         buzzerMuted:
           type: boolean
+        network:
+          type: string
+          enum: [online, reconnecting]
+        sensorFault:
+          type: boolean
+    TelemetryPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TelemetryPoint'
+        nextCursor:
+          type: string
+          nullable: true
     AlertEvent:
       type: object
       required: [id, deviceId, state, startedAt, evidence]
@@ -373,8 +617,7 @@ components:
         deviceId:
           type: string
         state:
-          type: string
-          enum: [suspect, fire_warning, acknowledged, recovered]
+          $ref: '#/components/schemas/AlertState'
         startedAt:
           type: string
           format: date-time
@@ -383,20 +626,55 @@ components:
           format: date-time
           nullable: true
         evidence:
-          type: object
-          required: [gasRise, temperatureRateCPerMinute]
-          properties:
-            gasRise:
-              type: number
-            temperatureRateCPerMinute:
-              type: number
+          $ref: '#/components/schemas/AlertEvidence'
+    AlertEvidence:
+      type: object
+      description: >-
+        Stored at trigger time. Clients must not reconstruct the reason for a
+        historical alert from the latest live values. The gas term is measured
+        in ADC codes rather than ppm because the MQ135 estimate is uncalibrated
+        and gasPpm may be absent; the rise is a difference and stays meaningful
+        without calibration.
+      required:
+        - gasAdcRise
+        - temperatureRateCPerMinute
+        - sampleCount
+      properties:
+        gasAdcRise:
+          type: integer
+          description: Filtered gas rise across the window, in ADC codes
+        gasAdcRiseThreshold:
+          type: integer
+          description: Configured rise threshold at trigger time, in ADC codes
+        temperatureRateCPerMinute:
+          type: number
+        temperatureRateThresholdCPerMinute:
+          type: number
+        sampleCount:
+          type: integer
+          minimum: 1
+        windowSeconds:
+          type: integer
+          minimum: 1
+    AlertPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AlertEvent'
+        nextCursor:
+          type: string
+          nullable: true
     Thresholds:
       type: object
-      required: [desiredVersion, temperatureHighC, gasHighPpm]
+      required: [desiredVersion, temperatureHighC, humidityHighRh, gasHighPpm]
       properties:
         desiredVersion:
           type: integer
           minimum: 1
+          description: Version 1 is the compile-time firmware default
         confirmedVersion:
           type: integer
           minimum: 1
@@ -405,6 +683,10 @@ components:
           type: number
           minimum: 0
           maximum: 80
+        humidityHighRh:
+          type: number
+          minimum: 0
+          maximum: 100
         gasHighPpm:
           type: number
           minimum: 1
@@ -417,13 +699,17 @@ components:
           enum: [confirmed, pending, rejected, timed_out]
     ThresholdUpdate:
       type: object
-      required: [temperatureHighC, gasHighPpm]
+      required: [temperatureHighC, humidityHighRh, gasHighPpm]
       additionalProperties: false
       properties:
         temperatureHighC:
           type: number
           minimum: 0
           maximum: 80
+        humidityHighRh:
+          type: number
+          minimum: 0
+          maximum: 100
         gasHighPpm:
           type: number
           minimum: 1
@@ -444,9 +730,89 @@ components:
         status:
           type: string
           enum: [pending]
+          description: Accepted for publication; the device has not confirmed yet
         desiredVersion:
           type: integer
           minimum: 1
         expiresAt:
           type: string
           format: date-time
+    CommandStatus:
+      type: object
+      required: [requestId, deviceId, type, state, acceptedAt]
+      properties:
+        requestId:
+          type: string
+        deviceId:
+          type: string
+        type:
+          type: string
+          enum: [set_mute, set_thresholds]
+        state:
+          type: string
+          description: >-
+            accepted and published are backend states; applied, rejected,
+            expired, duplicate and failed come from the device
+            acknowledgement. timed_out and publish_failed are terminal backend
+            outcomes.
+          enum:
+            - accepted
+            - published
+            - applied
+            - rejected
+            - expired
+            - duplicate
+            - failed
+            - timed_out
+            - publish_failed
+        acceptedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        expiresAt:
+          type: string
+          format: date-time
+        desiredVersion:
+          type: integer
+          minimum: 1
+          nullable: true
+        confirmedVersion:
+          type: integer
+          minimum: 1
+          nullable: true
+        errorCode:
+          type: string
+          nullable: true
+    WsEnvelope:
+      type: object
+      required: [type, eventId, occurredAt, deviceId, data]
+      properties:
+        type:
+          type: string
+          enum:
+            - telemetry.updated
+            - device.status_changed
+            - alert.state_changed
+            - command.status_changed
+            - thresholds.confirmed
+        eventId:
+          type: string
+          description: Clients deduplicate on this value; duplicates are possible
+        occurredAt:
+          type: string
+          format: date-time
+        deviceId:
+          type: string
+        data:
+          type: object
+          additionalProperties: true
+          description: >-
+            Event payload. telemetry.updated carries TelemetryPoint fields;
+            command.status_changed carries CommandStatus fields;
+            device.status_changed carries connectivity and lastSeenAt;
+            alert.state_changed carries AlertEvent fields.
+security:
+  - BearerAuth: []
