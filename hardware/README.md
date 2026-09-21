@@ -1,5 +1,7 @@
 # STM32F103C8 环境监测、阈值报警与 Wi-Fi 通信
 
+> 需要与本机 EMQX、`postgres-dev` 和 Go Backend 完成真实链路启动时，请按 [本地启动手册](../docs/local-runbook.md) 执行。本 README 保留固件专属的接线、构建、烧录和测试说明。
+
 本项目是一个基于 STM32F103C8T6 的裸机环境监测程序：通过 DHT11 采集温湿度，通过 ADC 采集 MQ135 的模拟输出，在 128×64 OLED 上轮播显示读数、气体详情、报警状态与网络状态。温度、湿度、气体浓度超限或温升/气体突增时，报警灯与蜂鸣器开启，且该判断不依赖网络。ESP8266/ESP8285 通过 Wi-Fi 建立 TCP 透传连接，由 STM32 编码 MQTT 3.1.1 遥测帧上传至 EMQX。
 
 本地判断逻辑（滤波、阈值、突增、静音优先级、页面内容）位于不依赖硬件的 `core/` 模块中，可在主机上完整测试；见「本地逻辑与主机测试」。
@@ -81,12 +83,7 @@ cp Esp8266/esp8266_config.example.h Esp8266/esp8266_config.local.h
 
 填写 `esp8266_config.local.h` 后重新编译。该文件已被 Git 忽略，禁止提交真实 Wi-Fi 或服务器凭据；未创建本机配置时，`esp8266.h` 的安全占位值只保证工程可编译，不能连接真实网络。
 
-网络调试助手应以 TCP Server 方式监听配置的端口。STM32 连接后先发送注册帧，然后周期发送数据：
-
-```text
-REG|MCU001
-APP001|<temperature>|<humidity>|<gas_ppm>
-```
+EMQX 应在配置的 IP/1883 监听。STM32 连接后使用 `DEVICE_ID` 作为 MQTT clientId，订阅 `device/control`，并周期向 `device/telemetry` 发布 JSON。完整启动顺序见 [本地启动手册](../docs/local-runbook.md)。
 
 OLED 轮播四页，每 2 秒切换，每 500 ms 刷新：
 
@@ -381,7 +378,7 @@ cmake --build hardware/build/host-tests-coverage
 
 **实机状态（2026-09-21）**：ESP8266 驱动已按长度交付二进制 `+IPD` 数据，发送及接收缓冲可容纳 640 字节 MQTT 帧，主循环已完成 CONNECT、SUBSCRIBE、QoS 1 PUBLISH 与 PING。已验证 `MCU001 → EMQX → Go Backend → postgres-dev`。下行命令的解析、Flash 写入与 ACK 尚未接入主循环。
 
-| 现状 | 需要 |
+| 迁移前状态 | 已落地改造 |
 | --- | --- |
 | `ESP8266_SEND_BUFFER_SIZE` / `ESP8266_MESSAGE_BUFFER_SIZE` 均为 64 字节 | 一帧遥测 PUBLISH 约 430 字节，缓冲区必须扩到 ~640 字节 |
 | `+IPD` 正文按 NUL 结尾的文本处理 | MQTT 帧内含 0x00 字节（如 16 位长度的低字节），需要按长度而不是按字符串交付 |
@@ -469,8 +466,8 @@ CRC 使用反射的 IEEE 802.3 多项式，因此标准工具（`crc32`、Python
 
 ### Needs Follow-up
 
-- 在目标开发板上完成一次完整的接线、烧录、传感器读取、报警、Wi-Fi/TCP 上传与下行消息验证；当前构建成功不能替代实机验证。
-- 与 Go Backend 联调现有两类换行结尾文本帧：注册帧 `REG|<device-id>`，数据帧 `APP001|<temperature>|<humidity>|<gas_ppm>`。
+- 继续验证 DHT11 接线/时序、蜂鸣器实际声音、Broker 重启恢复和断网自治；首轮烧录、OLED、MQ135 与 MQTT 遥测落库已通过。
+- 将 `device/control` PUBLISH 接入命令解析、静音/阈值动作、Flash 持久化与 `device/command-ack`。
 - 现有协议适合作为最小联调 baseline，但不建议未经验证直接冻结为最终协议：它缺少显式协议版本、字段名/单位声明、错误帧、鉴权和更严格的边界约束。后续若变化，需同时记录并协调 Hardware 与 Backend。
 - 补充可重复的烧录/实机验收记录；当前仓库只有构建和操作说明，没有自动化硬件测试。
 

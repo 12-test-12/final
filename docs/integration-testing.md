@@ -7,8 +7,8 @@
 | 链路 | 需要什么 | 当前状态 |
 | --- | --- | --- |
 | 模拟设备 → 真实 Broker → Go → 内存库 → REST | 无（进程内 Broker） | **已验证**，见 §3 |
-| 模拟设备 → EMQX → Go → PostgreSQL → REST/WebSocket | EMQX 镜像与现有 `postgres-dev` 容器 | 手册已就绪，**完整链路未执行**，见 §4 |
-| 真实设备 → EMQX → Go → PostgreSQL → REST/WebSocket | 实物开发板 + 上述镜像 | **未执行**，见 §6 |
+| 模拟设备 → EMQX → Go → PostgreSQL → REST/WebSocket | EMQX 镜像与现有 `postgres-dev` 容器 | **已验证** |
+| 真实设备 → EMQX → Go → PostgreSQL → REST | 实物开发板 + 上述镜像 | **已验证**（2026-09-21）；WebSocket 路由自动化测试覆盖 |
 | 云端命令 → 设备 ACK | 模拟设备即可 | **已验证**（模拟设备侧），见 §3 |
 | 真实设备遥测 → EMQX → Backend → PostgreSQL | 实物开发板 + 手机热点 | **已执行**（2026-09-21）：`MCU001` 完成 MQTT 上报，REST 可查且 `postgres-dev.telemetry` 已落库 |
 | 云端命令 → 真实设备 ACK | 实物开发板 + 固件 MQTT 接线 | **未执行**：已订阅控制主题，但命令应用与 ACK 尚未接入主循环 |
@@ -69,7 +69,7 @@ docker compose -f deploy/compose.yaml up -d emqx
 
 该编排仅提供 EMQX；数据库复用现有 `postgres-dev`，不再创建第二个 PostgreSQL 容器。`deploy/emqx/acl.conf` 实现契约要求的收发方向隔离：设备只能发布 `device/telemetry` 与 `device/command-ack`、只能订阅 `device/control`；后端相反；其余一律拒绝。
 
-> **该 ACL 文件未在运行中的 EMQX 上执行过。** 编写环境无法拉取镜像，因此其语法必须按部署的 EMQX 版本核对。文件注释里写明了每条规则的意图。
+EMQX 5.8 已在 2026-09-21 实机联调中加载该 ACL，设备和 Backend 使用不同用户名成功完成遥测方向通信。这是本地集成证据，不代表 TLS、独立设备凭据和生产安全审核已完成。
 
 启动后端并灌入模拟设备：
 
@@ -156,7 +156,7 @@ curl -X POST 'http://localhost:8080/api/v1/devices/MCU001/commands/mute' \
 
 上行射频链路已接入并通过首轮实机验收。原阻断项与处理如下：
 
-| 现状 | 需要 | 原因 |
+| 迁移前状态 | 已落地改造 | 原因 |
 | --- | --- | --- |
 | 收发缓冲区均 64 字节 | 扩到约 640 字节 | 一帧遥测 PUBLISH 约 430 字节 |
 | `+IPD` 正文按 NUL 结尾文本交付 | 按长度交付 | MQTT 帧含 `0x00` 字节 |
@@ -168,9 +168,9 @@ curl -X POST 'http://localhost:8080/api/v1/devices/MCU001/commands/mute' \
 
 | 风险 | 说明 | 缓解 |
 | --- | --- | --- |
-| EMQX ACL 语法未验证 | 见 §4 | 验收前按部署版本核对；先用 EMQX Dashboard 手工验证方向隔离 |
+| EMQX 生产安全未验证 | 本地 ACL 已运行，但尚无 TLS 和独立设备凭据 | 正式部署前增加 TLS、凭据轮换和方向隔离安全测试 |
 | 误报率未知 | 预警参数（150 ADC / 3 °C·min⁻¹）来自实施方案文档初值 | 记录触发证据并留出整定时间；用 `-scenario warm-up` 复现预期触发路径 |
-| 真机时序未验证 | DHT11、MQ135 预热、OLED、ESP8266 均未上电 | §6 |
+| 真机验收不完整 | OLED、MQ135、ESP8266 已上电；DHT11 仍有时序故障，蜂鸣器需听感确认 | §6 |
 | PostgreSQL 集成测试默认跳过 | 未设 `TEST_DATABASE_URL` 时跳过 | CI 必须提供该变量，否则数据库路径实际覆盖为零 |
 | 未同步时钟设备的时间语义 | `timestamp` 为 `null` 时后端以 `receivedAt` 排序 | 契约已规定；`-unsynced-clock` 可复现 |
 | 鉴权粒度 | 只有"有 token/无 token"，无用户-设备授权与操作分权 | `AUTH_MODE=none` 不得用于不可信网络；见 `backend/docs/api.md` §1.3 |

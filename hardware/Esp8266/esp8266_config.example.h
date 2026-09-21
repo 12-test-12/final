@@ -5,7 +5,7 @@
 #define WIFI_SSID       "your-wifi-ssid"
 #define WIFI_PASSWORD   "your-wifi-password"
 #define SERVER_IP       "192.0.2.1"
-#define SERVER_PORT     "8081"
+#define SERVER_PORT     "1883"
 #define DEVICE_ID       "MCU001"
 
 #endif
