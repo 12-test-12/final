@@ -46,6 +46,8 @@ Sensors → STM32 local safety loop → ESP8266/MQTT → EMQX
 - [完整实现方案](docs/implementation-plan.md)
 - [设备 MQTT 协议草案](docs/device-protocol.md)
 - [Backend OpenAPI 草案](docs/api/openapi.yaml)
+- [Backend API 详细契约](backend/docs/api.md)
+- [微信小程序界面与 API 对照表](backend/docs/wx-ui-api-mapping.md)
 
 当前仍不进行未评审的 API/设备协议破坏性变更、客户端隐式耦合、CGO 集成或大规模重构。
 

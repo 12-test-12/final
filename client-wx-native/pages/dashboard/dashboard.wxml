@@ -19,7 +19,7 @@
   <!-- ============ 实时数据 ============ -->
   <view class="section-head">
     <view class="section-title">实时数据</view>
-    <view class="section-tip">每 2 秒更新</view>
+    <view class="section-tip">{{streamText}}</view>
   </view>
 
   <view class="meters" wx:if="{{view}}">

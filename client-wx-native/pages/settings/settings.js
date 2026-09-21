@@ -8,6 +8,7 @@
  * - 期望版本(desiredVersion)与设备确认版本(confirmedVersion)不一致说明命令还在途中。
  */
 const deviceService = require('../../services/device.js')
+const socket = require('../../services/socket.js')
 const { formatRfc3339 } = require('../../utils/helpers.js')
 
 /** 设备确认状态文案（契约 §8：confirmed | pending | rejected | timed_out） */
@@ -36,6 +37,35 @@ Page({
       this.getTabBar().setData({ selected: 3 })
     }
     this.fetch()
+    this.subscribeStream()
+  },
+
+  onHide() {
+    this.unsubscribeStream()
+  },
+
+  onUnload() {
+    this.unsubscribeStream()
+  },
+
+  /**
+   * 订阅阈值确认事件：契约 §10 用 thresholds.confirmed / command.status_changed
+   * 通知设备已写入 Flash，比定时轮询更准（不再依赖 setTimeout 猜测）。
+   */
+  subscribeStream() {
+    if (this._offs) return
+    socket.connect('MCU001', { onResync: () => this.fetch() })
+    this._offs = [
+      socket.on('thresholds.confirmed', () => this.fetch()),
+      socket.on('command.status_changed', () => this.fetch()),
+    ]
+  },
+
+  unsubscribeStream() {
+    if (this._offs) {
+      this._offs.forEach((off) => off())
+      this._offs = null
+    }
   },
 
   /** 拉取当前阈值与版本信息 */
@@ -93,8 +123,11 @@ Page({
         confirmText: CONFIRM_TEXT.pending,
       })
       wx.showToast({ title: '已下发，等待设备确认', icon: 'none' })
-      // 模拟设备确认后的刷新；真实后端接入后由 thresholds.confirmed 事件驱动
-      setTimeout(() => this.fetch(), 3500)
+      // 设备确认由 WebSocket thresholds.confirmed 事件驱动；
+      // 这里保留一次延迟兜底，防止事件丢失导致状态长时间停留在 pending
+      setTimeout(() => {
+        if (this.data.confirmationState === 'pending') this.fetch()
+      }, 8000)
     } catch (e) {
       wx.showToast({ title: (e && e.message) || '下发失败', icon: 'none' })
     } finally {

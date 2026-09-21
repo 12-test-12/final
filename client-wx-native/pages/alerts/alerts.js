@@ -5,6 +5,7 @@
  * 注意：告警触发证据（evidence）由后端保存，页面不得用最新值反推历史告警原因。
  */
 const deviceService = require('../../services/device.js')
+const socket = require('../../services/socket.js')
 const { formatRfc3339 } = require('../../utils/helpers.js')
 
 /** 告警状态 -> 标签样式与文案（枚举值来自契约 §7） */
@@ -38,6 +39,38 @@ Page({
       this.getTabBar().setData({ selected: 2 })
     }
     this.fetch()
+    this.subscribeStream()
+  },
+
+  onHide() {
+    this.unsubscribeStream()
+  },
+
+  onUnload() {
+    this.unsubscribeStream()
+  },
+
+  /** 订阅复合预警状态变化：新事件产生时自动刷新列表（去抖，避免连续事件重复请求） */
+  subscribeStream() {
+    if (this._offs) return
+    socket.connect('MCU001', { onResync: () => this.fetch() })
+    this._offs = [
+      socket.on('alert.state_changed', () => {
+        if (this._refreshTimer) clearTimeout(this._refreshTimer)
+        this._refreshTimer = setTimeout(() => this.fetch(), 800)
+      }),
+    ]
+  },
+
+  unsubscribeStream() {
+    if (this._offs) {
+      this._offs.forEach((off) => off())
+      this._offs = null
+    }
+    if (this._refreshTimer) {
+      clearTimeout(this._refreshTimer)
+      this._refreshTimer = null
+    }
   },
 
   async fetch() {
