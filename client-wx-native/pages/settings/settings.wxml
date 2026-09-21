@@ -1,25 +1,36 @@
 <view class="page">
   <!-- 页头 -->
   <view class="page-head">
-    <view class="page-head-title">阈值设置</view>
-    <view class="page-head-sub">SETTINGS · 报警规则下发</view>
+    <view class="page-head-title">预警阈值</view>
+    <view class="page-head-sub">设置设备本地报警的安全边界</view>
   </view>
 
   <view class="hint" wx:if="{{loading}}">数据加载中...</view>
 
   <block wx:else>
-    <!-- 温度阈值 -->
+    <!-- ============ 报警规则 ============ -->
+    <view class="section-head">
+      <view class="section-title">报警规则</view>
+      <view class="section-tip">修改后需下发设备</view>
+    </view>
+
     <view class="card">
-      <view class="card-title">温度报警阈值</view>
-      <view class="slider-value">{{temperatureHighC}} <text class="slider-unit">°C</text></view>
+      <view class="card-title">温度上限</view>
+      <view class="set-value">
+        <text class="set-num">{{temperatureHighC}}</text>
+        <text class="set-unit">°C</text>
+      </view>
       <slider
         min="0"
         max="80"
         step="0.5"
         value="{{temperatureHighC}}"
-        activeColor="#3df0c9"
-        block-size="24"
+        activeColor="#3fe8c3"
+        backgroundColor="rgba(255,255,255,0.12)"
+        block-size="26"
+        block-color="#ffffff"
         bindchange="onTempChange"
+        bindchanging="onTempChange"
       />
       <view class="range-hint">
         <text>0 °C</text>
@@ -27,18 +38,23 @@
       </view>
     </view>
 
-    <!-- 气体阈值 -->
     <view class="card">
-      <view class="card-title">气体报警阈值</view>
-      <view class="slider-value">{{gasHighPpm}} <text class="slider-unit">ppm</text></view>
+      <view class="card-title">气体浓度上限</view>
+      <view class="set-value">
+        <text class="set-num">{{gasHighPpm}}</text>
+        <text class="set-unit">ppm</text>
+      </view>
       <slider
         min="1"
         max="999"
         step="1"
         value="{{gasHighPpm}}"
-        activeColor="#3df0c9"
-        block-size="24"
+        activeColor="#3fe8c3"
+        backgroundColor="rgba(255,255,255,0.12)"
+        block-size="26"
+        block-color="#ffffff"
         bindchange="onGasChange"
+        bindchanging="onGasChange"
       />
       <view class="range-hint">
         <text>1 ppm</text>
@@ -46,30 +62,36 @@
       </view>
     </view>
 
-    <!-- 版本与确认状态 -->
-    <view class="card">
-      <view class="card-title">下发状态</view>
-      <view class="version-row">
-        <text class="version-label">期望版本</text>
-        <text class="version-value">{{desiredVersion}}</text>
+    <!-- ============ 设备确认 ============ -->
+    <view class="section-head">
+      <view class="section-title">设备确认</view>
+      <view class="section-tip">确保规则已生效</view>
+    </view>
+
+    <view class="list-card">
+      <view class="list-row">
+        <text class="list-label">规则同步状态</text>
+        <text class="list-value {{confirmationState === 'confirmed' ? 'value-green' : 'value-amber'}}">{{confirmText}}</text>
       </view>
-      <view class="version-row">
-        <text class="version-label">设备确认版本</text>
-        <text class="version-value">{{confirmedVersion}}</text>
+      <view class="list-row">
+        <text class="list-label">期望版本</text>
+        <text class="list-value">{{desiredVersion}}</text>
       </view>
-      <view class="version-row">
-        <text class="version-label">确认状态</text>
-        <text class="version-value {{confirmationState === 'confirmed' ? 'value-green' : 'value-amber'}}">{{confirmText}}</text>
+      <view class="list-row">
+        <text class="list-label">设备确认版本</text>
+        <text class="list-value">{{confirmedVersion}}</text>
       </view>
-      <view class="version-row">
-        <text class="version-label">更新时间</text>
-        <text class="version-value">{{updatedAt}}</text>
+      <view class="list-row">
+        <text class="list-label">更新时间</text>
+        <text class="list-value">{{updatedAt}}</text>
       </view>
     </view>
 
     <view class="save-wrap">
-      <button class="btn btn-primary save-btn" bindtap="onSave" loading="{{saving}}">保存并下发到设备</button>
+      <button class="btn btn-primary save-btn" bindtap="onSave" loading="{{saving}}">
+        保存并下发到设备
+      </button>
     </view>
-    <view class="hint">保存后命令经后端下发给设备，设备确认后版本号才会一致</view>
+    <view class="hint">下发后需设备确认，确认前仍按旧规则报警</view>
   </block>
 </view>

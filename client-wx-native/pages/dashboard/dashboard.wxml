@@ -1,84 +1,103 @@
 <view class="page">
   <!-- 页头 -->
   <view class="page-head">
-    <view class="page-head-title">环境监控</view>
-    <view class="page-head-sub">SMART LAB · 实时动环监测</view>
+    <view class="page-head-title">机房环境总览</view>
+    <view class="page-head-sub">智慧机房 · 实时动环监测</view>
   </view>
 
-  <!-- 告警状态横幅 -->
-  <view class="banner banner-{{banner.level}}">
-    <view class="banner-dot"></view>
-    <view class="banner-body">
-      <view class="banner-text">{{banner.text}}</view>
-      <view class="banner-sub" wx:if="{{banner.sub}}">{{banner.sub}}</view>
+  <!-- ============ 系统风险状态 ============ -->
+  <view class="card">
+    <view class="risk-label">系统风险状态</view>
+    <view class="risk-main">
+      <view class="risk-dot level-{{banner.level}}"></view>
+      <text class="risk-text level-{{banner.level}}">{{banner.text}}</text>
+      <view class="tag tag-{{connectivity.level}} risk-pill">{{connectivity.text}}</view>
+    </view>
+    <view class="risk-sub" wx:if="{{banner.sub}}">{{banner.sub}}</view>
+  </view>
+
+  <!-- ============ 实时数据 ============ -->
+  <view class="section-head">
+    <view class="section-title">实时数据</view>
+    <view class="section-tip">每 2 秒更新</view>
+  </view>
+
+  <view class="meters" wx:if="{{view}}">
+    <view class="meter">
+      <view class="meter-top">
+        <view class="meter-badge badge-temp">T</view>
+        <text class="meter-label">温度</text>
+      </view>
+      <view class="meter-value">{{view.temperatureC}}<text class="meter-unit">°C</text></view>
+      <view class="meter-track">
+        <view class="meter-fill fill-temp" style="width: {{view.tempPercent}}%"></view>
+      </view>
+    </view>
+
+    <view class="meter">
+      <view class="meter-top">
+        <view class="meter-badge badge-hum">H</view>
+        <text class="meter-label">湿度</text>
+      </view>
+      <view class="meter-value">{{view.humidityRh}}<text class="meter-unit">%</text></view>
+      <view class="meter-track">
+        <view class="meter-fill fill-hum" style="width: {{view.humPercent}}%"></view>
+      </view>
+    </view>
+
+    <view class="meter">
+      <view class="meter-top">
+        <view class="meter-badge badge-gas">G</view>
+        <text class="meter-label">气体</text>
+      </view>
+      <view class="meter-value">{{view.gasPpm}}<text class="meter-unit">ppm</text></view>
+      <view class="meter-track">
+        <view class="meter-fill fill-gas" style="width: {{view.gasPercent}}%"></view>
+      </view>
     </view>
   </view>
 
-  <!-- 三项指标卡 -->
-  <view class="metrics" wx:if="{{view}}">
-    <view class="metric-card metric-temp">
-      <view class="metric-top">
-        <view class="metric-icon">°</view>
-        <view class="metric-label">温度</view>
-      </view>
-      <view class="metric-value">{{view.temperatureC}}<text class="metric-unit">°C</text></view>
-      <view class="metric-bar">
-        <view class="bar-fill fill-temp" style="width: {{view.tempPercent}}%"></view>
-      </view>
-    </view>
-    <view class="metric-card metric-hum">
-      <view class="metric-top">
-        <view class="metric-icon">💧</view>
-        <view class="metric-label">湿度</view>
-      </view>
-      <view class="metric-value">{{view.humidityRh}}<text class="metric-unit">%</text></view>
-      <view class="metric-bar">
-        <view class="bar-fill fill-hum" style="width: {{view.humPercent}}%"></view>
-      </view>
-    </view>
-    <view class="metric-card metric-gas">
-      <view class="metric-top">
-        <view class="metric-icon">☁</view>
-        <view class="metric-label">气体</view>
-      </view>
-      <view class="metric-value">{{view.gasPpm}}<text class="metric-unit">ppm</text></view>
-      <view class="metric-bar">
-        <view class="bar-fill fill-gas" style="width: {{view.gasPercent}}%"></view>
-      </view>
-    </view>
+  <!-- ============ 设备状态 ============ -->
+  <view class="section-head">
+    <view class="section-title">设备状态</view>
+    <view class="section-tip">本地采集终端</view>
   </view>
 
-  <!-- 设备状态卡 -->
   <view class="card" wx:if="{{latest}}">
-    <view class="status-row">
-      <view class="device-wrap">
-        <view class="device-pulse {{connectivity.level === 'ok' ? '' : 'device-pulse-off'}}"></view>
-        <view class="device-name">{{deviceId}}</view>
+    <view class="device-head">
+      <view class="device-name-wrap">
+        <view class="device-dot {{connectivity.level === 'green' ? '' : 'device-dot-off'}}"></view>
+        <text class="device-name">{{deviceId}}</text>
       </view>
       <view class="tag tag-{{connectivity.level}}">{{connectivity.text}}</view>
     </view>
-    <view class="status-grid">
-      <view class="status-item">
-        <view class="status-label">设备报警</view>
-        <view class="status-value {{latest.localAlarm ? 'value-red' : 'value-green'}}">{{latest.localAlarm ? '报警中' : '正常'}}</view>
+    <view class="device-grid">
+      <view class="device-cell">
+        <text class="cell-label">本地报警</text>
+        <text class="cell-value {{latest.localAlarm ? 'value-red' : 'value-green'}}">{{latest.localAlarm ? '报警中' : '正常'}}</text>
       </view>
-      <view class="status-item">
-        <view class="status-label">蜂鸣器</view>
-        <view class="status-value {{latest.buzzerMuted ? 'value-amber' : ''}}">{{latest.buzzerMuted ? '已静音' : '鸣叫中'}}</view>
+      <view class="device-cell">
+        <text class="cell-label">声光提示</text>
+        <text class="cell-value {{latest.buzzerMuted ? 'value-amber' : ''}}">{{latest.buzzerMuted ? '已静音' : '鸣叫中'}}</text>
       </view>
-      <view class="status-item">
-        <view class="status-label">更新时间</view>
-        <view class="status-value status-time">{{updatedAt}}</view>
+      <view class="device-cell">
+        <text class="cell-label">更新时间</text>
+        <text class="cell-value">{{updatedAt}}</text>
       </view>
     </view>
   </view>
 
-  <!-- 蜂鸣器远程控制 -->
+  <!-- ============ 远程控制 ============ -->
+  <view class="section-head">
+    <view class="section-title">远程控制</view>
+    <view class="section-tip">设备在线时可用</view>
+  </view>
+
   <view class="card" wx:if="{{latest}}">
     <view class="mute-row">
       <view class="mute-info">
-        <view class="mute-title">蜂鸣器远程控制</view>
-        <view class="mute-desc">静音只关闭声音，不影响检测和上报</view>
+        <view class="mute-title">蜂鸣器控制</view>
+        <view class="mute-desc">静音不影响环境检测与告警上报</view>
       </view>
       <button
         class="btn {{latest.buzzerMuted ? 'btn-outline' : 'btn-primary'}} mute-btn"

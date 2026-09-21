@@ -15,14 +15,28 @@ const STATE_META = {
   recovered: { tag: 'tag-green', text: '已恢复' },
 }
 
+/** 筛选标签：all 表示不过滤 */
+const FILTERS = [
+  { key: 'all', label: '全部' },
+  { key: 'fire_warning', label: '火情' },
+  { key: 'acknowledged', label: '已确认' },
+  { key: 'recovered', label: '已恢复' },
+]
+
 Page({
   data: {
     loading: true,
     error: '',
     alerts: [],
+    shown: [],
+    filters: FILTERS,
+    activeFilter: 'all',
   },
 
   onShow() {
+    if (typeof this.getTabBar === 'function' && this.getTabBar()) {
+      this.getTabBar().setData({ selected: 2 })
+    }
     this.fetch()
   },
 
@@ -43,8 +57,24 @@ Page({
         endedText: a.endedAt ? formatRfc3339(a.endedAt) : '',
       }))
       this.setData({ alerts, loading: false, error: '' })
+      this.applyFilter(this.data.activeFilter, alerts)
     } catch (e) {
       this.setData({ loading: false, error: (e && e.message) || '加载失败' })
     }
+  },
+
+  /** 本地筛选，避免为了切换标签重复请求后端 */
+  applyFilter(key, list) {
+    const source = list || this.data.alerts
+    this.setData({
+      activeFilter: key,
+      shown: key === 'all' ? source : source.filter((a) => a.state === key),
+    })
+  },
+
+  onFilterTap(e) {
+    const key = e.currentTarget.dataset.key
+    if (key === this.data.activeFilter) return
+    this.applyFilter(key)
   },
 })

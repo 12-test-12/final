@@ -1,4 +1,5 @@
 {
   "navigationBarTitleText": "实时监控",
-  "enablePullDownRefresh": false
+  "enablePullDownRefresh": true,
+  "backgroundTextStyle": "light"
 }

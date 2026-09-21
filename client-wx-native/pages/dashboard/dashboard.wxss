@@ -1,224 +1,174 @@
-.page {
-  padding-bottom: 40rpx;
-}
+/* ============================================================
+   机房总览页 · 墨绿磨砂玻璃
+   ============================================================ */
 
-/* ============ 告警横幅：呼吸灯 + 状态色 ============ */
-.banner {
-  margin: 24rpx 28rpx;
-  padding: 28rpx 30rpx;
-  border-radius: 32rpx;
-  border: 1rpx solid transparent;
+/* ============ 系统风险状态 ============ */
+.risk-label {
+  font-size: 23rpx;
+  color: var(--text-3);
+}
+.risk-main {
   display: flex;
   align-items: center;
+  margin-top: 16rpx;
 }
-.banner-dot {
-  flex-shrink: 0;
-  width: 20rpx;
-  height: 20rpx;
+.risk-dot {
+  width: 18rpx;
+  height: 18rpx;
   border-radius: 50%;
-  margin-right: 22rpx;
-}
-.banner-normal {
-  background: linear-gradient(135deg, rgba(61, 240, 201, 0.14), rgba(61, 240, 201, 0.04));
-  border-color: rgba(61, 240, 201, 0.35);
-}
-.banner-normal .banner-dot {
+  margin-right: 18rpx;
   background: var(--ok);
-  box-shadow: 0 0 14rpx var(--accent-glow);
-  animation: breathe 2.4s ease-in-out infinite;
+  box-shadow: 0 0 18rpx var(--glow);
+  animation: breathe 2.8s ease-in-out infinite;
 }
-.banner-suspect {
-  background: linear-gradient(135deg, rgba(255, 194, 75, 0.15), rgba(255, 194, 75, 0.04));
-  border-color: rgba(255, 194, 75, 0.4);
-}
-.banner-suspect .banner-dot {
-  background: var(--warn);
-  box-shadow: 0 0 14rpx rgba(255, 194, 75, 0.5);
-  animation: breathe 1.4s ease-in-out infinite;
-}
-.banner-fire {
-  background: linear-gradient(135deg, rgba(255, 92, 108, 0.2), rgba(255, 92, 108, 0.05));
-  border-color: rgba(255, 92, 108, 0.5);
-  animation: fire-pulse 1.1s ease-in-out infinite;
-}
-.banner-fire .banner-dot {
-  background: var(--danger);
-  box-shadow: 0 0 16rpx rgba(255, 92, 108, 0.6);
-}
-.banner-recovered {
-  background: linear-gradient(135deg, rgba(88, 199, 243, 0.14), rgba(88, 199, 243, 0.04));
-  border-color: rgba(88, 199, 243, 0.38);
-}
-.banner-recovered .banner-dot {
-  background: var(--info);
-  box-shadow: 0 0 14rpx rgba(88, 199, 243, 0.5);
-}
-.banner-text {
-  font-size: 34rpx;
-  font-weight: 700;
+.risk-text {
+  flex: 1;
+  font-size: 40rpx;
+  font-weight: 600;
+  color: var(--ok);
   letter-spacing: 1rpx;
-  color: var(--text);
 }
-.banner-normal .banner-text { color: var(--ok); }
-.banner-suspect .banner-text { color: var(--warn); }
-.banner-fire .banner-text { color: var(--danger); }
-.banner-recovered .banner-text { color: var(--info); }
-.banner-sub {
-  margin-top: 4rpx;
+.risk-pill {
+  flex-shrink: 0;
+}
+.risk-sub {
+  margin-top: 12rpx;
   font-size: 23rpx;
   color: var(--text-2);
 }
-@keyframes fire-pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 24rpx rgba(255, 92, 108, 0.25); }
-  50% { opacity: 0.72; box-shadow: 0 0 44rpx rgba(255, 92, 108, 0.45); }
-}
+
+/* 状态配色 */
+.level-suspect.risk-dot { background: var(--warn); box-shadow: 0 0 18rpx rgba(245, 201, 107, 0.4); animation-duration: 1.6s; }
+.level-suspect.risk-text { color: var(--warn); }
+.level-fire.risk-dot { background: var(--danger); box-shadow: 0 0 20rpx rgba(251, 113, 133, 0.55); animation-duration: 1.2s; }
+.level-fire.risk-text { color: var(--danger); }
+.level-recovered.risk-dot { background: var(--info); box-shadow: 0 0 18rpx rgba(125, 211, 252, 0.45); }
+.level-recovered.risk-text { color: var(--info); }
+
 @keyframes breathe {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
 
-/* ============ 三项指标卡 ============ */
-.metrics {
+/* ============ 实时数据三卡 ============ */
+.meters {
   display: flex;
   margin: 0 28rpx;
 }
-.metric-card {
+.meter {
   flex: 1;
-  background: linear-gradient(165deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.03) 60%);
-  border: 1rpx solid var(--line);
-  border-radius: 30rpx;
-  padding: 24rpx 22rpx;
-  box-shadow: 0 14rpx 36rpx rgba(0, 0, 0, 0.4), inset 0 1rpx 0 rgba(255, 255, 255, 0.05);
+  padding: 26rpx 22rpx 24rpx;
+  border-radius: var(--r-md);
+  background: linear-gradient(160deg, var(--glass-2), var(--glass));
+  border: 1rpx solid var(--glass-line);
+  box-shadow:
+    0 16rpx 34rpx rgba(0, 0, 0, 0.28),
+    inset 0 1rpx 0 rgba(255, 255, 255, 0.08);
 }
-.metric-card + .metric-card {
-  margin-left: 18rpx;
+.meter + .meter {
+  margin-left: 16rpx;
 }
-.metric-top {
+.meter-top {
   display: flex;
   align-items: center;
 }
-.metric-icon {
+.meter-badge {
   width: 44rpx;
   height: 44rpx;
-  border-radius: 14rpx;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 26rpx;
-  font-weight: 700;
-  margin-right: 10rpx;
+  line-height: 44rpx;
+  text-align: center;
+  font-size: 24rpx;
+  font-weight: 600;
+  border-radius: 12rpx;
+  margin-right: 12rpx;
 }
-.metric-temp .metric-icon {
-  background: rgba(255, 122, 89, 0.16);
-  color: #ff7a59;
-}
-.metric-hum .metric-icon {
-  background: rgba(88, 199, 243, 0.16);
-  color: var(--info);
-}
-.metric-gas .metric-icon {
-  background: rgba(61, 240, 201, 0.14);
-  color: var(--accent);
-}
-.metric-label {
+.badge-temp { background: rgba(251, 146, 116, 0.18); color: #ffa183; }
+.badge-hum { background: rgba(125, 211, 252, 0.18); color: #8ed6ff; }
+.badge-gas { background: rgba(63, 232, 195, 0.18); color: var(--accent); }
+.meter-label {
   font-size: 23rpx;
   color: var(--text-2);
-  letter-spacing: 1rpx;
 }
-.metric-value {
-  margin-top: 14rpx;
-  font-size: 52rpx;
-  font-weight: 700;
-  color: var(--text);
+.meter-value {
+  margin-top: 16rpx;
+  font-size: 50rpx;
+  font-weight: 600;
   line-height: 1.1;
+  color: var(--text);
   letter-spacing: -1rpx;
 }
-.metric-unit {
-  font-size: 21rpx;
+.meter-unit {
+  margin-left: 6rpx;
+  font-size: 20rpx;
   font-weight: 400;
   color: var(--text-3);
-  margin-left: 6rpx;
 }
-.metric-bar {
+.meter-track {
   margin-top: 18rpx;
-  height: 10rpx;
-  background: rgba(255, 255, 255, 0.07);
+  height: 8rpx;
   border-radius: 999rpx;
+  background: rgba(255, 255, 255, 0.08);
   overflow: hidden;
 }
-.bar-fill {
+.meter-fill {
   height: 100%;
   border-radius: 999rpx;
   transition: width 0.6s ease;
 }
-.fill-temp {
-  background: linear-gradient(90deg, #ffb14b, #ff5c6c);
-  box-shadow: 0 0 10rpx rgba(255, 122, 89, 0.5);
-}
-.fill-hum {
-  background: linear-gradient(90deg, #58c7f3, #6e7ff3);
-  box-shadow: 0 0 10rpx rgba(88, 199, 243, 0.5);
-}
-.fill-gas {
-  background: linear-gradient(90deg, #3df0c9, #ffc24b);
-  box-shadow: 0 0 10rpx rgba(61, 240, 201, 0.5);
-}
+.fill-temp { background: linear-gradient(90deg, #ffb27d, #fb7185); }
+.fill-hum { background: linear-gradient(90deg, #8ed6ff, #a5b4fc); }
+.fill-gas { background: linear-gradient(90deg, #45f0cb, #f5c96b); }
 
-/* ============ 设备状态卡 ============ */
-.status-row {
+/* ============ 设备状态 ============ */
+.device-head {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  align-items: center;
 }
-.device-wrap {
+.device-name-wrap {
   display: flex;
   align-items: center;
 }
-.device-pulse {
+.device-dot {
   width: 16rpx;
   height: 16rpx;
   border-radius: 50%;
-  background: var(--ok);
-  box-shadow: 0 0 0 6rpx rgba(61, 240, 201, 0.15), 0 0 14rpx var(--accent-glow);
   margin-right: 16rpx;
-  animation: breathe 2.6s ease-in-out infinite;
+  background: var(--ok);
+  box-shadow: 0 0 0 6rpx rgba(63, 232, 195, 0.12);
+  animation: breathe 2.8s ease-in-out infinite;
 }
-.device-pulse-off {
+.device-dot-off {
   background: var(--text-3);
   box-shadow: none;
   animation: none;
 }
 .device-name {
-  font-size: 34rpx;
-  font-weight: 700;
+  font-size: 36rpx;
+  font-weight: 600;
   color: var(--text);
-  letter-spacing: 3rpx;
+  letter-spacing: 2rpx;
 }
-.status-grid {
-  margin-top: 26rpx;
+.device-grid {
   display: flex;
+  margin-top: 28rpx;
 }
-.status-item {
+.device-cell {
   flex: 1;
 }
-.status-label {
+.cell-label {
+  display: block;
   font-size: 21rpx;
   color: var(--text-3);
-  letter-spacing: 2rpx;
   margin-bottom: 8rpx;
 }
-.status-value {
-  font-size: 28rpx;
-  color: var(--text);
+.cell-value {
+  font-size: 26rpx;
   font-weight: 600;
-}
-.status-time {
-  font-size: 23rpx;
-  color: var(--text-2);
-  font-weight: 400;
+  color: var(--text);
 }
 
-/* ============ 蜂鸣器控制 ============ */
+/* ============ 远程控制 ============ */
 .mute-row {
   display: flex;
   align-items: center;
@@ -226,7 +176,7 @@
 }
 .mute-info {
   flex: 1;
-  padding-right: 20rpx;
+  padding-right: 22rpx;
 }
 .mute-title {
   font-size: 30rpx;
@@ -234,14 +184,14 @@
   color: var(--text);
 }
 .mute-desc {
-  margin-top: 6rpx;
+  margin-top: 8rpx;
   font-size: 22rpx;
   color: var(--text-3);
+  line-height: 1.5;
 }
 .mute-btn {
   flex-shrink: 0;
-  width: 220rpx;
-  height: 80rpx;
-  font-size: 26rpx;
-  border-radius: 24rpx;
+  width: 240rpx;
+  height: 84rpx;
+  font-size: 27rpx;
 }

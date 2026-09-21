@@ -6,6 +6,7 @@
  * 本页统计卡片保留，图表占位区替换为真实图表组件。
  */
 const deviceService = require('../../services/device.js')
+const { formatRfc3339 } = require('../../utils/helpers.js')
 
 /** 时间范围选项（契约建议单次查询不超过 31 天） */
 const RANGES = [
@@ -24,15 +25,38 @@ function summarize(values) {
   return { min: f(min), max: f(max), avg: f(avg) }
 }
 
+/**
+ * 极值时刻：从真实历史样本里找出最大/最小值的发生时间。
+ * 注意：不由当前值反推，只使用返回的样本点。
+ */
+function findExtremes(items, key) {
+  if (!items.length) return { maxAt: '--', minAt: '--' }
+  let maxItem = items[0]
+  let minItem = items[0]
+  items.forEach((it) => {
+    if (it[key] > maxItem[key]) maxItem = it
+    if (it[key] < minItem[key]) minItem = it
+  })
+  return {
+    maxAt: formatRfc3339(maxItem.timestamp || maxItem.receivedAt),
+    minAt: formatRfc3339(minItem.timestamp || minItem.receivedAt),
+  }
+}
+
 Page({
   data: {
     ranges: RANGES.map((r) => r.label),
     activeIndex: 0,
     loading: true,
     stats: null,
+    sampleCount: 0,
+    extremes: null,
   },
 
   onShow() {
+    if (typeof this.getTabBar === 'function' && this.getTabBar()) {
+      this.getTabBar().setData({ selected: 1 })
+    }
     this.fetch()
   },
 
@@ -53,10 +77,16 @@ Page({
       const items = res.items || []
       this.setData({
         loading: false,
+        sampleCount: items.length,
         stats: {
           temp: summarize(items.map((i) => i.temperatureC)),
           hum: summarize(items.map((i) => i.humidityRh)),
           gas: summarize(items.map((i) => i.gasPpm)),
+        },
+        extremes: {
+          temp: findExtremes(items, 'temperatureC'),
+          hum: findExtremes(items, 'humidityRh'),
+          gas: findExtremes(items, 'gasPpm'),
         },
       })
     } catch (e) {
