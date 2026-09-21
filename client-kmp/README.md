@@ -47,9 +47,11 @@ about [Kotlin Multiplatform](https://www.jetbrains.com.cn/en-us/help/kotlin-mult
 
 ## Mini App SDK Dependency
 
-`settings.gradle.kts` 通过本地 composite build 分别解析未发布的 Gradle 插件与 runtime 坐标。
-`shared` 应用 `io.github.bobcgn.miniapp` 后，插件会提供 Mini App target，在 `shared/src`
-下创建 `miniappMain/kotlin` 与 `miniappTest/kotlin`，并仅把 runtime SDK 接入 `miniappMain`。
+`settings.gradle.kts` 通过 `gradlePluginPortal()` 与 `mavenCentral()` 解析已发布的 Mini App SDK。
+`shared` 应用 `io.github.bobcgn.miniapp:0.1.0` 后，插件会提供 Mini App target，在
+`shared/src` 下创建 `miniappMain/kotlin` 与 `miniappTest/kotlin`，并自动把
+`io.github.bobcgn:kmp-miniapp-sdk:0.1.0` 接入 `miniappMain`。工程不再依赖 SDK 的本地绝对路径、
+`KMP_MINIAPP_SDK_PATH` 或 composite build。
 
 ## Collaboration Workflow
 
