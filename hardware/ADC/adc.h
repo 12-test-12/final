@@ -3,8 +3,8 @@
 
 #include "stm32f10x.h"
 
-#define ADC_PORT        GPIOA
-#define MQ135_PIN       GPIO_Pin_1
+#define ADC_PORT GPIOA
+#define MQ135_PIN GPIO_Pin_1
 
 void MY_ADC_Init(void);
 uint16_t MY_ADC_GetValue(void);
@@ -13,7 +13,8 @@ float MQ135_GetData(void);
 
 /**
  * @brief  由给定的 ADC 值估算 NH3 浓度。
- * @param  adc_value ADC 采样值，有效范围 0~4095；超出范围的值会被当作边界值处理。
+ * @param  adc_value ADC 采样值，有效范围
+ * 0~4095；超出范围的值会被当作边界值处理。
  * @return 估算浓度，单位 ppm，已限幅到 1.0~999.0。
  * @note   与 MQ135_GetData 使用完全相同的曲线与常数，只是把采样与换算分开。
  *         主循环对**滤波后**的 ADC 值调用本函数，这样上报的 gasPpm 与
@@ -28,4 +29,3 @@ float MQ135_EstimatePpm(uint16_t adc_value);
 #define MQ137_GetData MQ135_GetData
 
 #endif
-

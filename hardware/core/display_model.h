@@ -52,7 +52,15 @@ typedef struct
     /* Bitmask of EnvAlarmCause. The model reads bits, so this module does not
      * depend on env_monitor.h and the two can be tested apart. */
     uint32_t alarm_causes;
+    /* Status code from the last DHT11 read, as returned by DHT11_Read_Data:
+     * zero means the read succeeded, non-zero is the failure code. Shown next to
+     * the sensor-fault line so a bench fault can be told apart — "no response"
+     * is wiring or power, a checksum failure is the sensor or the bit timing.
+     * Only meaningful while the sensor-fault cause bit is set. */
+    uint8_t dht_error;
     bool buzzer_muted;
+    /* Actual instantaneous output after cause filtering and beep cadence. */
+    bool buzzer_active;
     /* True while the gas estimate comes from an uncalibrated curve, which the
      * gas page says out loud instead of presenting the number as a measurement. */
     bool gas_uncalibrated;
