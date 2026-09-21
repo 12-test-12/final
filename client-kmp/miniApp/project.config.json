@@ -1,0 +1,13 @@
+{
+  "description": "KMP shared runtime WeChat host",
+  "miniprogramRoot": "./",
+  "setting": {
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true
+  },
+  "compileType": "miniprogram",
+  "appid": "touristappid",
+  "projectname": "lab-monitor-kmp"
+}
