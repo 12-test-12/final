@@ -2,10 +2,10 @@
   <!-- 页头 -->
   <view class="page-head">
     <view class="page-head-title">历史趋势</view>
-    <view class="page-head-sub">TRENDS · 指标统计分析</view>
+    <view class="page-head-sub">数据统计与曲线</view>
   </view>
 
-  <!-- 时间范围切换 -->
+  <!-- ============ 时间范围 ============ -->
   <view class="range-bar">
     <view
       wx:for="{{ranges}}"
@@ -13,69 +13,106 @@
       class="range-item {{activeIndex === index ? 'range-active' : ''}}"
       data-index="{{index}}"
       bindtap="onRangeTap"
+      hover-class="range-hover"
+      hover-stay-time="60"
     >{{item}}</view>
   </view>
 
   <view class="hint" wx:if="{{loading}}">数据加载中...</view>
 
   <block wx:if="{{stats}}">
-    <view class="card">
-      <view class="stat-title">温度（°C）</view>
-      <view class="stat-row">
-        <view class="stat-item">
-          <view class="stat-label">最低</view>
-          <view class="stat-value">{{stats.temp.min}}</view>
+    <!-- ============ 统计摘要（横向滑动） ============ -->
+    <view class="section-head">
+      <view class="section-title">统计摘要</view>
+      <view class="section-tip">共 {{sampleCount}} 条样本</view>
+    </view>
+
+    <scroll-view class="stat-scroll" scroll-x enable-flex show-scrollbar="{{false}}">
+      <view class="stat-scroll-inner">
+        <view class="stat-card">
+          <view class="stat-top">
+            <text class="stat-name">温度</text>
+            <text class="stat-unit">°C</text>
+          </view>
+          <view class="stat-main">{{stats.temp.avg}}</view>
+          <view class="stat-meta">
+            <view class="stat-meta-item">
+              <text class="stat-meta-label">最低</text>
+              <text class="stat-meta-value">{{stats.temp.min}}</text>
+            </view>
+            <view class="stat-meta-item">
+              <text class="stat-meta-label">最高</text>
+              <text class="stat-meta-value">{{stats.temp.max}}</text>
+            </view>
+          </view>
+          <view class="stat-extreme" wx:if="{{extremes}}">峰值 {{extremes.temp.maxAt}}</view>
         </view>
-        <view class="stat-item">
-          <view class="stat-label">平均</view>
-          <view class="stat-value">{{stats.temp.avg}}</view>
+
+        <view class="stat-card">
+          <view class="stat-top">
+            <text class="stat-name">湿度</text>
+            <text class="stat-unit">%RH</text>
+          </view>
+          <view class="stat-main">{{stats.hum.avg}}</view>
+          <view class="stat-meta">
+            <view class="stat-meta-item">
+              <text class="stat-meta-label">最低</text>
+              <text class="stat-meta-value">{{stats.hum.min}}</text>
+            </view>
+            <view class="stat-meta-item">
+              <text class="stat-meta-label">最高</text>
+              <text class="stat-meta-value">{{stats.hum.max}}</text>
+            </view>
+          </view>
+          <view class="stat-extreme" wx:if="{{extremes}}">峰值 {{extremes.hum.maxAt}}</view>
         </view>
-        <view class="stat-item">
-          <view class="stat-label">最高</view>
-          <view class="stat-value">{{stats.temp.max}}</view>
+
+        <view class="stat-card">
+          <view class="stat-top">
+            <text class="stat-name">气体</text>
+            <text class="stat-unit">ppm</text>
+          </view>
+          <view class="stat-main">{{stats.gas.avg}}</view>
+          <view class="stat-meta">
+            <view class="stat-meta-item">
+              <text class="stat-meta-label">最低</text>
+              <text class="stat-meta-value">{{stats.gas.min}}</text>
+            </view>
+            <view class="stat-meta-item">
+              <text class="stat-meta-label">最高</text>
+              <text class="stat-meta-value">{{stats.gas.max}}</text>
+            </view>
+          </view>
+          <view class="stat-extreme" wx:if="{{extremes}}">峰值 {{extremes.gas.maxAt}}</view>
         </view>
+      </view>
+    </scroll-view>
+
+    <!-- ============ 曲线区 ============ -->
+    <view class="section-head">
+      <view class="section-title">曲线视图</view>
+      <view class="section-tip">折线图下一步接入</view>
+    </view>
+
+    <view class="card chart-card">
+      <view class="chart-legend">
+        <view class="legend-item"><view class="legend-dot dot-temp"></view><text>温度</text></view>
+        <view class="legend-item"><view class="legend-dot dot-hum"></view><text>湿度</text></view>
+        <view class="legend-item"><view class="legend-dot dot-gas"></view><text>气体</text></view>
+      </view>
+      <view class="chart-body">
+        <view class="grid-line" wx:for="{{[0,1,2,3]}}" wx:key="*this"></view>
+        <view class="chart-mask">
+          <view class="chart-mask-title">趋势曲线即将上线</view>
+          <view class="chart-mask-sub">三指标同屏对比</view>
+        </view>
+      </view>
+      <view class="chart-xaxis">
+        <text>区间起点</text>
+        <text>此刻</text>
       </view>
     </view>
 
-    <view class="card">
-      <view class="stat-title">湿度（%RH）</view>
-      <view class="stat-row">
-        <view class="stat-item">
-          <view class="stat-label">最低</view>
-          <view class="stat-value">{{stats.hum.min}}</view>
-        </view>
-        <view class="stat-item">
-          <view class="stat-label">平均</view>
-          <view class="stat-value">{{stats.hum.avg}}</view>
-        </view>
-        <view class="stat-item">
-          <view class="stat-label">最高</view>
-          <view class="stat-value">{{stats.hum.max}}</view>
-        </view>
-      </view>
-    </view>
-
-    <view class="card">
-      <view class="stat-title">气体浓度（ppm）</view>
-      <view class="stat-row">
-        <view class="stat-item">
-          <view class="stat-label">最低</view>
-          <view class="stat-value">{{stats.gas.min}}</view>
-        </view>
-        <view class="stat-item">
-          <view class="stat-label">平均</view>
-          <view class="stat-value">{{stats.gas.avg}}</view>
-        </view>
-        <view class="stat-item">
-          <view class="stat-label">最高</view>
-          <view class="stat-value">{{stats.gas.max}}</view>
-        </view>
-      </view>
-    </view>
-
-    <!-- ECharts 图表占位：下一步接入 ec-canvas 三指标折线图 -->
-    <view class="chart-placeholder">
-      <view class="chart-placeholder-text">ECharts 趋势折线图将在下一步接入</view>
-    </view>
+    <view class="hint">统计基于所选区间内的真实历史样本计算</view>
   </block>
 </view>

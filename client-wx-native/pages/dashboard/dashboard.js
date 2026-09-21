@@ -41,6 +41,9 @@ Page({
     this.fetchInitial()
   },
   onShow() {
+    if (typeof this.getTabBar === 'function' && this.getTabBar()) {
+      this.getTabBar().setData({ selected: 0 })
+    }
     this.startPolling()
   },
   onHide() {
@@ -48,6 +51,12 @@ Page({
   },
   onUnload() {
     this.stopPolling()
+  },
+
+  /** 下拉刷新（dashboard.json 已开启 enablePullDownRefresh） */
+  async onPullDownRefresh() {
+    await this.fetchInitial()
+    wx.stopPullDownRefresh()
   },
 
   /** 初始化：并行拉取设备状态与最新遥测 */
@@ -88,6 +97,7 @@ Page({
     })
   },
 
+
   startPolling() {
     if (this._timer) return
     this._timer = setInterval(async () => {
@@ -106,6 +116,7 @@ Page({
       this._timer = null
     }
   },
+
 
   /** 远程静音/恢复：202 表示命令已被后端接受，等待设备确认 */
   async onMuteTap() {

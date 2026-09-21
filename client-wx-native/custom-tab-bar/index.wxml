@@ -1,0 +1,22 @@
+<view class="tabbar">
+  <view class="tabbar-inner">
+    <view
+      class="tab-item {{selected === index ? 'tab-item-active' : ''}}"
+      wx:for="{{list}}"
+      wx:key="pagePath"
+      data-index="{{index}}"
+      bindtap="onTap"
+      hover-class="tab-item-hover"
+      hover-stay-time="60"
+    >
+      <view class="tab-pill">
+        <image
+          class="tab-icon"
+          src="{{selected === index ? item.activeIcon : item.icon}}"
+          mode="aspectFit"
+        ></image>
+        <text class="tab-label" wx:if="{{selected === index}}">{{item.text}}</text>
+      </view>
+    </view>
+  </view>
+</view>

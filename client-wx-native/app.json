@@ -8,14 +8,15 @@
   "window": {
     "navigationBarTextStyle": "white",
     "navigationBarTitleText": "机房环境监控",
-    "navigationBarBackgroundColor": "#07100e",
-    "backgroundColor": "#07100e",
+    "navigationBarBackgroundColor": "#071310",
+    "backgroundColor": "#071310",
     "backgroundTextStyle": "light"
   },
   "tabBar": {
+    "custom": true,
     "color": "#5c716c",
-    "selectedColor": "#3df0c9",
-    "backgroundColor": "#0a1412",
+    "selectedColor": "#3fe8c3",
+    "backgroundColor": "#0d1e1a",
     "borderStyle": "black",
     "list": [
       {
