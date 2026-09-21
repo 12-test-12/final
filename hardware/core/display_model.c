@@ -231,7 +231,9 @@ static void render_gas(const DisplayInput *input, DisplayFrame *frame)
 static void render_alarm(const DisplayInput *input, DisplayFrame *frame)
 {
     char letters[8];
+    char sensor[DISPLAY_LINE_BUFFER];
     bool alarmed = input->alarm_causes != 0U;
+    bool faulted = EnvAlarmCausePresent(input->alarm_causes, DISPLAY_CAUSE_SENSOR_FAULT);
 
     render_cause_letters(input->alarm_causes, letters);
     line_join(frame->lines[0], "Alarm: ", letters);
@@ -239,11 +241,33 @@ static void render_alarm(const DisplayInput *input, DisplayFrame *frame)
     /* The buzzer line reports the actual output, not the mute request, because
      * those differ exactly when the mute is suppressing an active alarm: that is
      * the state an operator needs to notice on the panel. */
-    line_set(frame->lines[1], TextSelect(alarmed && !input->buzzer_muted, "Buzzer: ON", "Buzzer: off"));
+    line_set(frame->lines[1], TextSelect(input->buzzer_active, "Buzzer: ON", "Buzzer: off"));
+
     /* Derived from the cause bit rather than from a second flag, so the line
-     * cannot disagree with the causes shown on the line above it. */
-    line_set(frame->lines[2], TextSelect(EnvAlarmCausePresent(input->alarm_causes, DISPLAY_CAUSE_SENSOR_FAULT),
-                                         "Sensor: FAULT", "Sensor: ok"));
+     * cannot disagree with the causes shown on the line above it.
+     *
+     * A fault carries its status code as well ("Sensor: F5"), because on the
+     * bench the code is the difference between a wiring problem and a sensor
+     * that answers but cannot be parsed. A fault reported without a code — the
+     * monitor can raise one without the driver ever having run — keeps the
+     * plain word rather than inventing a code that did not come from the
+     * driver. */
+    if (!faulted)
+    {
+        line_set(frame->lines[2], "Sensor: ok");
+    }
+    else if (input->dht_error == 0U || input->dht_error > 7U)
+    {
+        line_set(frame->lines[2], "Sensor: FAULT");
+    }
+    else
+    {
+        char code[DISPLAY_LINE_BUFFER];
+
+        (void)TextFormatUnsigned(code, sizeof(code), input->dht_error, 1U);
+        line_join(sensor, "Sensor: F", code);
+        line_set(frame->lines[2], sensor);
+    }
 
     if (!alarmed)
     {
@@ -349,7 +373,9 @@ void DisplayModelRender(DisplayPage page, const DisplayInput *input, DisplayFram
         empty.gas_adc_raw = 0U;
         empty.gas_adc_filtered = 0U;
         empty.alarm_causes = 0U;
+        empty.dht_error = 0U;
         empty.buzzer_muted = false;
+        empty.buzzer_active = false;
         empty.gas_uncalibrated = true;
         empty.threshold_version = 0U;
         empty.network = DISPLAY_NETWORK_LINKING;

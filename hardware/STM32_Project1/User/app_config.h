@@ -45,4 +45,26 @@
 #define THRESHOLD_FLASH_SLOT0_ADDR  0x0800F800U
 #define THRESHOLD_FLASH_SLOT1_ADDR  0x0800FC00U
 
+/*
+ * 上电自检（bring-up 辅助）。
+ *
+ * LED 与蜂鸣器平时只在报警时输出，而 DHT11 一旦读取失败就会持续报警，因此
+ * 「蜂鸣器不响」既可能是驱动没工作，也可能是报警本来就没触发，现场无法区分。
+ * 上电时让 PA4 与 PA8 同时输出一小段时间，可以在完全不依赖传感器读数与阈值
+ * 判断的前提下单独验证这条输出链路：能响/能亮说明驱动与接线成立，剩下的问题
+ * 就只在报警判定或接线引脚上。
+ *
+ * 这是调试辅助，不属于报警逻辑：它不读传感器、不参与阈值判断、运行期间不再
+ * 触发。现场验收完成后把 HARDWARE_SELFTEST_ON_BOOT 置 0 即可关闭。
+ */
+#define HARDWARE_SELFTEST_ON_BOOT   0
+#define HARDWARE_SELFTEST_MS        300U
+
+/* Buzzer policy for the current bring-up stage. Only gas-related causes are
+ * audible; temperature, humidity and sensor faults remain visible on LED/OLED
+ * and in telemetry. At the 100 ms main-loop cadence this is 200 ms on and
+ * 800 ms off, avoiding a continuously sounding buzzer. */
+#define GAS_BUZZER_PERIOD_TICKS     10U
+#define GAS_BUZZER_ON_TICKS          2U
+
 #endif

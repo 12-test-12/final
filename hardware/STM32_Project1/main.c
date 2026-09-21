@@ -1,5 +1,6 @@
 #include "stm32f10x.h"                  // Device header
 #include "delay.h"
+#include "app_config.h"
 #include "OLED.h"
 #include "adc.h"
 #include "dht11.h"
@@ -82,6 +83,7 @@ int main(void)
     uint8_t humidity = 0U;
     uint8_t dhtError;
     uint8_t wifiTaskStatus;
+    uint8_t buzzerActive = 0U;
     MqttLinkState mqttState = MQTT_LINK_TCP;
     uint8_t mqttTx[MQTT_MAX_PACKET_SIZE];
     uint8_t mqttRx[MQTT_MAX_PACKET_SIZE];
@@ -119,6 +121,21 @@ int main(void)
     BuildBootId(bootId);
     LED_Init();
     BEEP_Init();
+
+    /* Bring-up self-test: exercises PA4 and PA8 for a moment before anything
+     * else can turn them on. The buzzer is otherwise only driven from the alarm
+     * path, so a silent buzzer on the bench is ambiguous — it can mean the
+     * driver is not reaching the pin, or that no alarm is active. A chirp at
+     * power-up resolves that without touching the alarm logic. See
+     * app_config.h for why this exists and how to switch it off. */
+    if (HARDWARE_SELFTEST_ON_BOOT != 0U)
+    {
+        LED_On();
+        BEEP_On();
+        delay_ms(HARDWARE_SELFTEST_MS);
+        LED_Off();
+        BEEP_Off();
+    }
 
     /* The local monitor is initialised before the network is touched. Sampling,
      * filtering and the alarm decision must not wait for Wi-Fi: the device has
@@ -192,9 +209,14 @@ int main(void)
             LED_Off();
         }
 
-        /* The buzzer is the only output the mute affects. The LED above follows
-         * local_alarm regardless, so a mute can never hide an alarm locally. */
-        if (evaluation.buzzer_on)
+        /* Only gas-related causes are audible in this stage. Other causes still
+         * drive the LED, OLED and telemetry. The 200 ms / 800 ms cadence avoids
+         * a continuous tone while preserving an unmistakable local warning. */
+        buzzerActive = (uint8_t)(evaluation.buzzer_on &&
+                       ((evaluation.alarm_causes &
+                         (ENV_ALARM_GAS_HIGH | ENV_ALARM_RAPID_GAS_RISE)) != 0U) &&
+                       ((tick % GAS_BUZZER_PERIOD_TICKS) < GAS_BUZZER_ON_TICKS));
+        if (buzzerActive != 0U)
         {
             BEEP_On();
         }
@@ -219,7 +241,11 @@ int main(void)
             display.gas_adc_raw = evaluation.gas_adc_raw;
             display.gas_adc_filtered = evaluation.gas_adc_filtered;
             display.alarm_causes = evaluation.alarm_causes;
+            /* The driver's own status code travels with the fault, so the panel
+             * can say which failure it is instead of only that one happened. */
+            display.dht_error = dhtError;
             display.buzzer_muted = EnvMonitorMuted(&monitor);
+            display.buzzer_active = (buzzerActive != 0U);
             display.threshold_version = EnvMonitorThresholdVersion(&monitor);
             /* The panel shows the fault rather than hiding it: an operator
              * looking at the device should be able to see that its stored

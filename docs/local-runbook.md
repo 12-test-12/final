@@ -85,6 +85,19 @@ cmake --preset debug
 cmake --build --preset debug
 ```
 
+**先确认 hex 来自当前源码。** `build/debug` 的 CMake 缓存可能在工程迁移前生成（缓存内的源目录指向旧路径），此时 `cmake --preset debug` 会直接报错，而目录里残留的旧 hex 也不包含最近的功能改动。报错时用 `--fresh` 重新配置：
+
+```sh
+cmake --preset debug --fresh
+cmake --build --preset debug
+```
+
+烧录前用这一条命令核对产物确实是当前固件 —— 有输出才说明构建里包含了 MQTT 遥测路径：
+
+```sh
+strings hardware/build/debug/STM32_Project1.bin | grep -c 'device/telemetry'
+```
+
 使用 STM32CubeProgrammer 选择 `hardware/build/debug/STM32_Project1.hex`，通过 ST-LINK/SWD 烧录、校验并复位。如已安装 OpenOCD，也可在 `hardware` 目录执行：
 
 ```sh
@@ -92,7 +105,7 @@ openocd -f interface/stlink.cfg -f target/stm32f1x.cfg \
   -c 'program build/debug/STM32_Project1.elf verify reset exit'
 ```
 
-上电后预期：OLED 轮播数据；完成 Wi-Fi、MQTT CONNACK 和 SUBACK 后显示联网；设备每秒向 `device/telemetry` 发布 QoS 1 JSON；告警时 LED 亮且 PB13 输出 2 kHz PWM。
+上电后预期：OLED 轮播数据；完成 Wi-Fi、MQTT CONNACK 和 SUBACK 后显示联网；设备每秒向 `device/telemetry` 发布 QoS 1 JSON。气体超限或气体突增时，PA8/TIM1_CH1 以 2 kHz PWM 间歇发声（200 ms 响、800 ms 停）；其他告警只保持 LED、OLED 和遥测状态。
 
 ## 6. 联调检查与停止
 
@@ -115,5 +128,6 @@ docker compose -f deploy/compose.yaml down
 ## 7. 当前已知限制
 
 - 真实遥测上行已通；远程静音、阈值写入和设备 ACK 还未接入固件主循环。
-- 当前实测板的 DHT11 返回时序错误，需确认 PA5、上拉电阻、3.3 V/GND 和传感器型号。
+- DHT11 已在实测板持续读数通过；若第 3 页后续出现 `Sensor: F<code>`，按 `hardware/README.md` 的状态码表检查 PA5、上拉电阻、3.3 V/GND 和传感器型号。
+- 提交版默认关闭上电蜂鸣器自检。蜂鸣器不响时先确认 OLED 报警原因包含 `G` 或 `g`；只有气体超限/突增才会让 PA8/TIM1_CH1 间歇输出。需要隔离检查输出链路时，可临时把 `HARDWARE_SELFTEST_ON_BOOT` 置 1，验收后必须恢复为 0。
 - MQ135 ppm 尚未现场标定，验收时应同时观察原始/滤波 ADC。

@@ -23,7 +23,9 @@ static DisplayInput quiet_input(void)
     input.gas_adc_raw = 1350U;
     input.gas_adc_filtered = 1328U;
     input.alarm_causes = 0U;
+    input.dht_error = 0U;
     input.buzzer_muted = false;
+    input.buzzer_active = false;
     input.gas_uncalibrated = true;
     input.threshold_version = 1U;
     input.network = DISPLAY_NETWORK_LINKED;
@@ -204,6 +206,23 @@ static void test_alarm_page(void)
      * never disagree about whether the instrument is faulted. */
     CHECK_TRUE(strncmp(frame.lines[2], "Sensor: FAULT", 13) == 0);
 
+    TEST_CASE("a faulted sensor reports the driver status code");
+    /* "the sensor never answered" and "the sensor answered but the bytes did not
+     * parse" are different bench faults with different fixes, so the panel has
+     * to name which one it is rather than only that something failed. */
+    input.dht_error = 5U;
+    DisplayModelRender(DISPLAY_PAGE_ALARM, &input, &frame);
+    CHECK_TRUE(strncmp(frame.lines[2], "Sensor: F5", 10) == 0);
+
+    TEST_CASE("a code outside the driver range falls back to the plain word");
+    /* The monitor can raise the fault without the driver ever having produced a
+     * code, and a stored code is never trusted blindly onto the panel. */
+    input.dht_error = 9U;
+    DisplayModelRender(DISPLAY_PAGE_ALARM, &input, &frame);
+    CHECK_TRUE(strncmp(frame.lines[2], "Sensor: FAULT", 13) == 0);
+
+    input.dht_error = 0U;
+
     TEST_CASE("several causes are all shown in a fixed order");
     input.alarm_causes = DISPLAY_CAUSE_GAS_HIGH | DISPLAY_CAUSE_TEMPERATURE_HIGH |
                          DISPLAY_CAUSE_HUMIDITY_HIGH;
@@ -213,15 +232,26 @@ static void test_alarm_page(void)
     TEST_CASE("an active alarm shows the buzzer as on");
     input.alarm_causes = DISPLAY_CAUSE_GAS_HIGH;
     input.buzzer_muted = false;
+    input.buzzer_active = true;
     DisplayModelRender(DISPLAY_PAGE_ALARM, &input, &frame);
     CHECK_TRUE(strncmp(frame.lines[1], "Buzzer: ON", 10) == 0);
+    CHECK_TRUE(strncmp(frame.lines[3], "State: ALARM", 12) == 0);
+
+    TEST_CASE("a non-gas alarm can remain silent");
+    input.alarm_causes = DISPLAY_CAUSE_TEMPERATURE_HIGH;
+    input.buzzer_active = false;
+    DisplayModelRender(DISPLAY_PAGE_ALARM, &input, &frame);
+    CHECK_TRUE(strncmp(frame.lines[0], "Alarm: T", 8) == 0);
+    CHECK_TRUE(strncmp(frame.lines[1], "Buzzer: off", 11) == 0);
     CHECK_TRUE(strncmp(frame.lines[3], "State: ALARM", 12) == 0);
 
     TEST_CASE("a muted alarm still reports the alarm, not silence");
     /* This is the state an operator has to be able to notice: the alarm is
      * active and the buzzer is suppressed. The page must say both, because a
      * page that showed only "muted" would look like a clear room. */
+    input.alarm_causes = DISPLAY_CAUSE_GAS_HIGH;
     input.buzzer_muted = true;
+    input.buzzer_active = false;
     DisplayModelRender(DISPLAY_PAGE_ALARM, &input, &frame);
     CHECK_TRUE(strncmp(frame.lines[0], "Alarm: G", 8) == 0);
     CHECK_TRUE(strncmp(frame.lines[1], "Buzzer: off", 11) == 0);
@@ -333,6 +363,7 @@ static void test_cause_bits_agree_with_the_monitor(void)
 
         input.alarm_causes = evaluation.alarm_causes;
         input.buzzer_muted = EnvMonitorMuted(&monitor);
+        input.buzzer_active = evaluation.buzzer_on;
         DisplayModelRender(DISPLAY_PAGE_ALARM, &input, &frame);
         CHECK_TRUE(strncmp(frame.lines[0], "Alarm: G", 8) == 0);
         CHECK_TRUE(strncmp(frame.lines[1], "Buzzer: ON", 10) == 0);
