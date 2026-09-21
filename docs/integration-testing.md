@@ -10,7 +10,8 @@
 | 模拟设备 → EMQX → Go → PostgreSQL → REST/WebSocket | EMQX 镜像与现有 `postgres-dev` 容器 | 手册已就绪，**完整链路未执行**，见 §4 |
 | 真实设备 → EMQX → Go → PostgreSQL → REST/WebSocket | 实物开发板 + 上述镜像 | **未执行**，见 §6 |
 | 云端命令 → 设备 ACK | 模拟设备即可 | **已验证**（模拟设备侧），见 §3 |
-| 云端命令 → 真实设备 ACK | 实物开发板 + 固件 MQTT 接线 | **未执行**：固件侧编解码层已实现，但未接到射频上，见 §7 |
+| 真实设备遥测 → EMQX → Backend → PostgreSQL | 实物开发板 + 手机热点 | **已执行**（2026-09-21）：`MCU001` 完成 MQTT 上报，REST 可查且 `postgres-dev.telemetry` 已落库 |
+| 云端命令 → 真实设备 ACK | 实物开发板 + 固件 MQTT 接线 | **未执行**：已订阅控制主题，但命令应用与 ACK 尚未接入主循环 |
 | 断网自治（本地采样/判断/声光不依赖网络） | 实物开发板 | **未执行**，见 §6 |
 | 阈值掉电恢复 | 实物开发板（或 Flash 模拟） | 逻辑**已验证**（主机测试覆盖断电截断、擦除失败、单字节翻转），硬件路径未验证 |
 | 复合火警误报边界 | 调参记录 + 现场数据 | **未评估**：参数为实施方案文档初值 |
@@ -151,9 +152,9 @@ curl -X POST 'http://localhost:8080/api/v1/devices/MCU001/commands/mute' \
 5. **MQ135 标定**：预热曲线、负载电阻确认、标准气体标定；标定前 `gasPpm` 只是相对指标。
 6. **MQTT 实机链路**：见 §7，需先完成固件侧射频接线。
 
-## 7. 已知阻塞：固件侧 MQTT 未接线
+## 7. 实机 MQTT 验收状态
 
-固件侧的报文编解码、Payload 构造、命令解析与 ACK 已实现并有主机测试（`hardware/core/`，90% 行覆盖），但**没有接到射频上**。阻断点是 ESP8266 驱动：
+上行射频链路已接入并通过首轮实机验收。原阻断项与处理如下：
 
 | 现状 | 需要 | 原因 |
 | --- | --- | --- |
@@ -161,7 +162,7 @@ curl -X POST 'http://localhost:8080/api/v1/devices/MCU001/commands/mute' \
 | `+IPD` 正文按 NUL 结尾文本交付 | 按长度交付 | MQTT 帧含 `0x00` 字节 |
 | 主循环只维护 TCP 文本帧 | 节拍驱动的会话状态机 | 需要 CONNECT → SUBSCRIBE → 发布/心跳 |
 
-因此 E2E 的设备侧目前由 `cmd/device-sim` 承担。**在固件接线完成并通过实机验证之前，不得声称设备已通过 MQTT 上报。**
+实机首轮证据：EMQX 显示 `MCU001`/`device` 已连接且订阅 1 个主题；Backend 接收的遥测为 `network=online`；PostgreSQL 已按 `(deviceId, bootId, sequence)` 持久化。本轮还发现并修复了 `bootId` 中的连字符违反 Backend 字段约束的问题。
 
 ## 8. 未覆盖风险
 

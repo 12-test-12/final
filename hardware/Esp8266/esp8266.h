@@ -55,6 +55,10 @@ typedef enum
 uint8_t ESP8266_Init(void);
 uint8_t ESP8266_Task(void);
 uint8_t ESP8266_IsWifiConnected(void);
+uint8_t ESP8266_IsTcpConnected(void);
+uint8_t ESP8266_OpenTcp(void);
+uint8_t ESP8266_SendBytes(const uint8_t *payload, uint16_t length);
+uint8_t ESP8266_GetPacket(uint8_t *buffer, uint16_t capacity, uint16_t *length);
 void ESP8266_SetData(uint16_t gasPpm, uint8_t temperature, uint8_t humidity);
 char ESP8266_GetCmd(void);
 uint8_t ESP8266_GetMessage(char *buffer, uint16_t capacity);

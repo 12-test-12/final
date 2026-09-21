@@ -31,6 +31,7 @@ add_executable(${PROJECT_NAME}
     core/command_json.c
     core/mqtt_packet.c
     core/threshold_store.c
+    core/boot_id.c
     dht11/dht11.c
     Esp8266/esp8266.c
     LED/led.c

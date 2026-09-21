@@ -6,13 +6,13 @@
 
 #define ESP8266_RX_BUFFER_SIZE       512U
 #define ESP8266_COMMAND_BUFFER_SIZE  128U
-#define ESP8266_SEND_BUFFER_SIZE      64U
-#define ESP8266_MESSAGE_BUFFER_SIZE   64U
+#define ESP8266_SEND_BUFFER_SIZE      96U
+#define ESP8266_MESSAGE_BUFFER_SIZE  640U
 
 static volatile char s_rxBuffer[ESP8266_RX_BUFFER_SIZE];
 static volatile uint16_t s_rxIndex = 0U;
 static volatile char s_receivedCommand = 0;
-static volatile char s_messageBuffer[ESP8266_MESSAGE_BUFFER_SIZE];
+static volatile uint8_t s_messageBuffer[ESP8266_MESSAGE_BUFFER_SIZE];
 static volatile uint16_t s_messageLength = 0U;
 static volatile uint16_t s_ipdPayloadRemaining = 0U;
 static volatile uint8_t s_messageReady = 0U;
@@ -22,9 +22,11 @@ static volatile uint8_t s_tcpConnected = 0U;
 static volatile uint8_t s_registered = 0U;
 static volatile uint8_t s_wifiGotIpIndex = 0U;
 static volatile uint8_t s_wifiDisconnectIndex = 0U;
+static volatile uint8_t s_tcpClosedIndex = 0U;
 
 static const char s_wifiGotIpText[] = "WIFI GOT IP";
 static const char s_wifiDisconnectText[] = "WIFI DISCONNECT";
+static const char s_tcpClosedText[] = "CLOSED";
 
 static uint16_t s_gasPpm = 0U;
 static uint8_t s_humidity = 0U;
@@ -61,6 +63,13 @@ static void ESP8266_ParseIncomingByte(char received)
                                  &s_wifiGotIpIndex) != 0U))
     {
         s_wifiConnected = 1U;
+    }
+
+    if ((s_ipdState != 6U) &&
+        (ESP8266_MatchStatusText(received, s_tcpClosedText, &s_tcpClosedIndex) != 0U))
+    {
+        s_tcpConnected = 0U;
+        s_registered = 0U;
     }
 
     if ((s_ipdState != 6U) &&
@@ -117,17 +126,15 @@ static void ESP8266_ParseIncomingByte(char received)
             }
             break;
         case 6U:
-            if ((received != '\r') && (received != '\n') &&
-                (s_messageLength < (ESP8266_MESSAGE_BUFFER_SIZE - 1U)))
+            if (s_messageLength < ESP8266_MESSAGE_BUFFER_SIZE)
             {
-                s_messageBuffer[s_messageLength] = received;
+                s_messageBuffer[s_messageLength] = (uint8_t)received;
                 s_messageLength++;
             }
 
             s_ipdPayloadRemaining--;
             if (s_ipdPayloadRemaining == 0U)
             {
-                s_messageBuffer[s_messageLength] = '\0';
                 s_messageReady = 1U;
                 s_ipdState = 0U;
             }
@@ -337,17 +344,22 @@ static uint16_t ESP8266_StringLength(const char *text)
     return length;
 }
 
-static uint8_t ESP8266_SendPayload(const char *payload)
+uint8_t ESP8266_SendBytes(const uint8_t *payload, uint16_t payloadLength)
 {
     char command[ESP8266_COMMAND_BUFFER_SIZE];
     uint16_t length = 0U;
+
+    if ((payload == 0) || (payloadLength == 0U))
+    {
+        return 0U;
+    }
 
     command[0] = '\0';
     if ((ESP8266_AppendString(command, sizeof(command), &length, "AT+CIPSEND=") == 0U) ||
         (ESP8266_AppendUnsigned(command,
                                 sizeof(command),
                                 &length,
-                                ESP8266_StringLength(payload)) == 0U))
+                                payloadLength) == 0U))
     {
         return 0U;
     }
@@ -359,8 +371,19 @@ static uint8_t ESP8266_SendPayload(const char *payload)
     }
 
     ESP8266_ClearRxBuffer();
-    ESP8266_SendString(payload);
+    {
+        uint16_t index;
+        for (index = 0U; index < payloadLength; index++)
+        {
+            ESP8266_SendByte(payload[index]);
+        }
+    }
     return ESP8266_WaitFor("SEND OK", 0, 3000U);
+}
+
+static uint8_t ESP8266_SendPayload(const char *payload)
+{
+    return ESP8266_SendBytes((const uint8_t *)payload, ESP8266_StringLength(payload));
 }
 
 static void ESP8266_UartInit(void)
@@ -487,6 +510,59 @@ uint8_t ESP8266_IsWifiConnected(void)
     return s_wifiConnected;
 }
 
+uint8_t ESP8266_IsTcpConnected(void)
+{
+    return s_tcpConnected;
+}
+
+uint8_t ESP8266_OpenTcp(void)
+{
+    char command[ESP8266_COMMAND_BUFFER_SIZE];
+    uint16_t length = 0U;
+
+    if (s_wifiConnected == 0U)
+    {
+        return 0U;
+    }
+    if (s_tcpConnected != 0U)
+    {
+        return 1U;
+    }
+
+    command[0] = '\0';
+    (void)ESP8266_AppendString(command, sizeof(command), &length, "AT+CIPSTART=\"TCP\",\"");
+    (void)ESP8266_AppendString(command, sizeof(command), &length, SERVER_IP);
+    (void)ESP8266_AppendString(command, sizeof(command), &length, "\",");
+    (void)ESP8266_AppendString(command, sizeof(command), &length, SERVER_PORT);
+    ESP8266_SendCommand(command);
+    if (ESP8266_WaitFor("CONNECT", "ALREADY CONNECTED", 5000U) == 0U)
+    {
+        return 0U;
+    }
+    s_tcpConnected = 1U;
+    return 1U;
+}
+
+uint8_t ESP8266_GetPacket(uint8_t *buffer, uint16_t capacity, uint16_t *length)
+{
+    uint16_t index;
+
+    if ((buffer == 0) || (length == 0) || (s_messageReady == 0U) ||
+        (capacity < s_messageLength))
+    {
+        return 0U;
+    }
+    USART_ITConfig(ESP8266_USART, USART_IT_RXNE, DISABLE);
+    for (index = 0U; index < s_messageLength; index++)
+    {
+        buffer[index] = s_messageBuffer[index];
+    }
+    *length = s_messageLength;
+    s_messageReady = 0U;
+    USART_ITConfig(ESP8266_USART, USART_IT_RXNE, ENABLE);
+    return 1U;
+}
+
 void ESP8266_SetData(uint16_t gasPpm, uint8_t temperature, uint8_t humidity)
 {
     s_gasPpm = gasPpm;
@@ -515,7 +591,7 @@ uint8_t ESP8266_GetMessage(char *buffer, uint16_t capacity)
          (index < s_messageLength) && ((index + 1U) < capacity);
          index++)
     {
-        buffer[index] = s_messageBuffer[index];
+        buffer[index] = (char)s_messageBuffer[index];
     }
     buffer[index] = '\0';
     s_messageReady = 0U;
