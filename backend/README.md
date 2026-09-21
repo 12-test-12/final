@@ -6,6 +6,8 @@
 
 ## 运行
 
+需要与真实硬件、EMQX 和 `postgres-dev` 一起启动时，优先使用根目录的 [本地启动手册](../docs/local-runbook.md)；本节保留 Backend 单模块运行方式。
+
 ```sh
 go run .
 ```

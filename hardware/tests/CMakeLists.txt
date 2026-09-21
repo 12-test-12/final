@@ -33,6 +33,7 @@ set(CORE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/../core/command_json.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../core/mqtt_packet.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../core/threshold_store.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../core/boot_id.c"
 )
 
 set(TEST_SOURCES
@@ -46,6 +47,7 @@ set(TEST_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/test_command_json.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/test_mqtt_packet.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/test_threshold_store.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_boot_id.c"
 )
 
 add_executable(host_tests ${CORE_SOURCES} ${TEST_SOURCES})

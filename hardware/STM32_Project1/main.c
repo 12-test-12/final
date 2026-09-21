@@ -7,6 +7,9 @@
 #include "env_monitor.h"
 #include "flash_config.h"
 #include "threshold_store.h"
+#include "telemetry_json.h"
+#include "mqtt_packet.h"
+#include "boot_id.h"
 #include "esp8266.h"
 #include "led.h"
 
@@ -28,6 +31,40 @@
 #define DISPLAY_REFRESH_TICKS 5U       /* panel refresh every 500 ms */
 #define DISPLAY_ROTATE_TICKS 20U       /* page change every 2 s */
 #define UPLINK_PERIOD_TICKS 10U        /* one telemetry frame per second */
+#define MQTT_KEEP_ALIVE_SECONDS 30U
+
+typedef enum
+{
+    MQTT_LINK_TCP = 0U,
+    MQTT_LINK_WAIT_CONNACK,
+    MQTT_LINK_WAIT_SUBACK,
+    MQTT_LINK_ONLINE
+} MqttLinkState;
+
+static void BuildBootId(char bootId[17])
+{
+    uint32_t identity = (*(const uint32_t *)0x1FFFF7E8UL) ^
+                        (*(const uint32_t *)0x1FFFF7ECUL) ^
+                        (*(const uint32_t *)0x1FFFF7F0UL);
+    BootIdFormat(identity, SysTick->VAL ^ MY_ADC_GetValue(), bootId);
+}
+
+static uint8_t MqttSend(uint8_t *packet, uint32_t length)
+{
+    return (length > 0U && length <= 0xFFFFU) ?
+           ESP8266_SendBytes(packet, (uint16_t)length) : 0U;
+}
+
+static uint16_t MqttTakePacketId(uint16_t *next)
+{
+    uint16_t current = *next;
+    (*next)++;
+    if (*next == 0U)
+    {
+        *next = 1U;
+    }
+    return current;
+}
 
 int main(void)
 {
@@ -45,6 +82,15 @@ int main(void)
     uint8_t humidity = 0U;
     uint8_t dhtError;
     uint8_t wifiTaskStatus;
+    MqttLinkState mqttState = MQTT_LINK_TCP;
+    uint8_t mqttTx[MQTT_MAX_PACKET_SIZE];
+    uint8_t mqttRx[MQTT_MAX_PACKET_SIZE];
+    char telemetryJson[512];
+    char bootId[17];
+    uint16_t mqttRxLength = 0U;
+    uint16_t mqttPacketId = 1U;
+    uint32_t telemetrySequence = 0U;
+    uint32_t lastMqttActivityMs = 0U;
 
     uint32_t now_ms = 0U;
     uint32_t tick = 0U;
@@ -70,6 +116,7 @@ int main(void)
     OLED_Update();
 
     MY_ADC_Init();
+    BuildBootId(bootId);
     LED_Init();
     BEEP_Init();
 
@@ -191,19 +238,110 @@ int main(void)
             OLED_Update();
         }
 
-        /* --- uplink --- */
+        /* --- MQTT uplink ---
+         * ESP8266 carries raw MQTT bytes over a single TCP socket. Connection
+         * acknowledgement and subscription acknowledgement are required before
+         * the OLED reports the network online, preventing the former false
+         * positive where Wi-Fi association alone looked like cloud delivery. */
+        if (ESP8266_GetPacket(mqttRx, sizeof(mqttRx), &mqttRxLength) != 0U)
+        {
+            MqttPacket incoming;
+            const char *rejectReason = 0;
+            if (MqttDecode(mqttRx, mqttRxLength, &incoming, &rejectReason))
+            {
+                if (mqttState == MQTT_LINK_WAIT_CONNACK &&
+                    incoming.type == MQTT_PACKET_CONNACK &&
+                    incoming.return_code == MQTT_CONNACK_ACCEPTED)
+                {
+                    uint32_t length = MqttEncodeSubscribe(mqttTx, sizeof(mqttTx),
+                                                          MqttTakePacketId(&mqttPacketId),
+                                                          "device/control", 1U);
+                    if (MqttSend(mqttTx, length) != 0U)
+                    {
+                        mqttState = MQTT_LINK_WAIT_SUBACK;
+                        lastMqttActivityMs = now_ms;
+                    }
+                }
+                else if (mqttState == MQTT_LINK_WAIT_SUBACK && incoming.type == MQTT_PACKET_SUBACK)
+                {
+                    mqttState = MQTT_LINK_ONLINE;
+                    lastMqttActivityMs = now_ms;
+                }
+                else if (incoming.type == MQTT_PACKET_PINGRESP)
+                {
+                    lastMqttActivityMs = now_ms;
+                }
+            }
+            (void)rejectReason;
+        }
+
+        if (ESP8266_IsTcpConnected() == 0U)
+        {
+            mqttState = MQTT_LINK_TCP;
+        }
+
         if ((tick % UPLINK_PERIOD_TICKS) == 0U)
         {
-            ESP8266_SetData(evaluation.gas_ppm, evaluation.temperature_c, evaluation.humidity_rh);
-            wifiTaskStatus = ESP8266_Task();
-            if (wifiTaskStatus == ESP8266_STATUS_RECONNECT_REQUIRED)
+            if (ESP8266_IsWifiConnected() == 0U)
             {
                 display.network = DISPLAY_NETWORK_LINKING;
-                (void)ESP8266_Init();
+                wifiTaskStatus = ESP8266_Init();
+                (void)wifiTaskStatus;
             }
-            (void)ESP8266_GetMessage(wifiMessage, sizeof(wifiMessage));
-            display.network = (ESP8266_IsWifiConnected() != 0U) ?
-                              DISPLAY_NETWORK_LINKED : DISPLAY_NETWORK_FAILED;
+            else if (mqttState == MQTT_LINK_TCP && ESP8266_OpenTcp() != 0U)
+            {
+                uint32_t length = MqttEncodeConnect(mqttTx, sizeof(mqttTx), DEVICE_ID,
+                                                    MQTT_KEEP_ALIVE_SECONDS, "device", 0);
+                if (MqttSend(mqttTx, length) != 0U)
+                {
+                    mqttState = MQTT_LINK_WAIT_CONNACK;
+                    lastMqttActivityMs = now_ms;
+                }
+            }
+            else if (mqttState == MQTT_LINK_ONLINE)
+            {
+                TelemetryPayload telemetry;
+                uint32_t jsonLength;
+                uint32_t packetLength;
+
+                telemetry.device_id = DEVICE_ID;
+                telemetry.boot_id = bootId;
+                telemetry.sequence = telemetrySequence;
+                telemetry.uptime_ms = now_ms;
+                telemetry.temperature_c = evaluation.temperature_c;
+                telemetry.humidity_rh = evaluation.humidity_rh;
+                telemetry.gas_adc_raw = evaluation.gas_adc_raw;
+                telemetry.gas_adc_filtered = evaluation.gas_adc_filtered;
+                telemetry.gas_ppm_tenths = (uint16_t)(evaluation.gas_ppm * 10U);
+                telemetry.gas_calibrated = false;
+                telemetry.local_alarm = evaluation.local_alarm;
+                telemetry.alarm_causes = evaluation.alarm_causes;
+                telemetry.buzzer_muted = EnvMonitorMuted(&monitor);
+                telemetry.network_online = true;
+                telemetry.threshold_version = EnvMonitorThresholdVersion(&monitor);
+                telemetry.sensor_fault = ((evaluation.alarm_causes & ENV_ALARM_SENSOR_FAULT) != 0U);
+                jsonLength = TelemetryJsonEncode(&telemetry, telemetryJson, sizeof(telemetryJson));
+                packetLength = MqttEncodePublish(mqttTx, sizeof(mqttTx), "device/telemetry",
+                                                 MqttTakePacketId(&mqttPacketId), 1U,
+                                                 (const uint8_t *)telemetryJson, jsonLength);
+                if (jsonLength > 0U && MqttSend(mqttTx, packetLength) != 0U)
+                {
+                    telemetrySequence++;
+                    lastMqttActivityMs = now_ms;
+                }
+            }
+            display.network = (mqttState == MQTT_LINK_ONLINE) ?
+                              DISPLAY_NETWORK_LINKED : DISPLAY_NETWORK_LINKING;
+        }
+
+        if (mqttState == MQTT_LINK_ONLINE &&
+            (now_ms - lastMqttActivityMs) >= (MQTT_KEEP_ALIVE_SECONDS * 500U))
+        {
+            uint32_t length = MqttEncodePingReq(mqttTx, sizeof(mqttTx));
+            if (MqttSend(mqttTx, length) != 0U)
+            {
+                lastMqttActivityMs = now_ms;
+            }
         }
 
         delay_ms(LOCAL_TICK_MS);

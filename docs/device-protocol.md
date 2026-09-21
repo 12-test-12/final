@@ -2,7 +2,7 @@
 
 状态：`v1.0.0-frozen`（SHIXUN-3 契约评审通过后冻结；后续修改必须走 §9 变更流程）。
 
-本文是设备与 Backend 之间 MQTT 报文的事实源。当前固件仍在发送 TCP 文本帧（见 §7），MQTT 是目标态，由 SHIXUN-8 在实机验证后切换。
+本文是设备与 Backend 之间 MQTT 报文的事实源。当前固件已使用 ESP8266 TCP 透传 MQTT 3.1.1，并已实机验证 CONNECT、SUBSCRIBE 与 `device/telemetry` QoS 1 上报。`device/control` 已订阅，但命令执行与 ACK 尚未接入主循环，不得按已完成对待。
 
 ## 1. Transport
 
@@ -230,7 +230,7 @@ MQTT 连接参数：协议 3.1.1（或 5.0），`clientId` 必须等于 `deviceI
 
 REST 控制接口返回 202 只表示命令已被 Backend 接受并进入发布流程，**不代表设备已执行**。客户端必须等待 ACK 或超时结果。
 
-## 7. 与现状 TCP 文本帧的迁移
+## 7. 从 TCP 文本帧到 MQTT 的迁移状态
 
 当前固件（`hardware/Esp8266/esp8266.c`）发送的是换行结尾的文本帧：
 
@@ -243,8 +243,8 @@ APP001|<temperature>|<humidity>|<gasPpm>
 
 迁移规则（冻结）：
 
-1. MQTT 编解码与订阅**新增**在现有 TCP 代码旁，不删除、不改写现有 TCP 路径。
-2. 实机验证 MQTT 全部通过（冷启动、AP 不存在、密码错误、Broker 重启、断网恢复、重复命令、超长 Payload）后，才允许停止旧 TCP 发送。
+1. 主循环已停止调用旧 `APP001` 文本帧任务，改为 CONNECT → SUBSCRIBE → PUBLISH/PING 状态机。
+2. 2026-09-21 实机验证已覆盖冷启动、手机热点、EMQX 连接、QoS 1 遥测上报、Go 消费与 PostgreSQL 落库。Broker 重启、断网恢复和控制命令仍待验证。
 3. 禁止在同一次未经验证的修改中同时迁移 HAL、重写传感器驱动并切换 MQTT。
 4. 迁移期间字段映射：文本帧的 `<temperature>` → `temperatureC`（整数部分）、`<humidity>` → `humidityRh`、`<gasPpm>` → `gasPpm`；文本帧缺少的 `bootId`、`sequence`、`gasAdcRaw`、`gasAdcFiltered`、`thresholdVersion` 等字段必须在 MQTT 路径中补齐，不能靠 Backend 猜测。
 

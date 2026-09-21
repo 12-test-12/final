@@ -21,14 +21,14 @@ Client
 
 ```text
 hardware/          STM32、传感器、显示、报警及设备通信实现
-backend/           Go 服务端（当前仅有最小可运行入口）
+backend/           Go 服务端（MQTT、PostgreSQL、REST 与 WebSocket）
 client-kmp/        Kotlin Multiplatform 客户端方案
 client-wx-native/  微信原生小程序基线方案
 ```
 
 ## Current Phase
 
-当前阶段：**System Design and API Contract Draft**。
+当前阶段：**首轮软硬件联调与验收**。
 
 项目主题为“智慧机房/实验室微环境动环监控与早期火情预警系统”。目标链路为：
 
@@ -37,7 +37,9 @@ Sensors → STM32 local safety loop → ESP8266/MQTT → EMQX
         → Go Backend → REST/WebSocket → WeChat/KMP Clients
 ```
 
-当前仓库事实与目标态存在明确差异：硬件现用 STM32F10x Standard Peripheral Library（非 HAL）、DHT11 和 ESP8266 TCP 文本帧。MQTT、JSON Payload、远程阈值持久化、数据入库、复合预警和客户端业务页面均按阶段实施，不能把目标描述成已有能力。
+当前仓库已完成真实硬件 MQTT 遥测上行、EMQX、Go Backend 与 PostgreSQL 落库的首轮联调。硬件仍使用 STM32F10x Standard Peripheral Library（非 HAL）。真实设备的远程命令/ACK、DHT11 故障处理与完整断网恢复验收仍未完成，不得按已验收能力对待。
+
+本地启动真实硬件、EMQX、`postgres-dev` 和 Go Backend 请按 [本地启动手册](docs/local-runbook.md) 执行。
 
 设计事实源：
 
@@ -45,17 +47,7 @@ Sensors → STM32 local safety loop → ESP8266/MQTT → EMQX
 - [设备 MQTT 协议草案](docs/device-protocol.md)
 - [Backend OpenAPI 草案](docs/api/openapi.yaml)
 
-本阶段明确不做：
-
-- 正式业务实现
-- API 设计冻结（当前仅为可评审草案）
-- 数据库设计
-- UI 实现
-- KMP / 微信性能对照
-- CGO 集成
-- 大规模重构
-
-以上内容留待需求和跨模块契约明确后的后续阶段处理。
+当前仍不进行未评审的 API/设备协议破坏性变更、客户端隐式耦合、CGO 集成或大规模重构。
 
 ## Collaboration Workflow
 
