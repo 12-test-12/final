@@ -5,6 +5,7 @@
 #include "adc.h"
 #include "dht11.h"
 #include "control_link.h"
+#include "session_dispatch.h"
 #include "display_model.h"
 #include "env_monitor.h"
 #include "flash_config.h"
@@ -41,14 +42,6 @@
 #define UPLINK_PERIOD_TICKS 10U        /* one telemetry frame per second */
 #define MQTT_KEEP_ALIVE_SECONDS 30U
 
-typedef enum
-{
-    MQTT_LINK_TCP = 0U,
-    MQTT_LINK_WAIT_CONNACK,
-    MQTT_LINK_WAIT_SUBACK,
-    MQTT_LINK_ONLINE
-} MqttLinkState;
-
 static void BuildBootId(char bootId[17])
 {
     uint32_t identity = (*(const uint32_t *)0x1FFFF7E8UL) ^
@@ -63,101 +56,10 @@ static uint8_t MqttSend(uint8_t *packet, uint32_t length)
            ESP8266_SendBytes(packet, (uint16_t)length) : 0U;
 }
 
-static uint16_t MqttTakePacketId(uint16_t *next)
+static uint8_t MqttSendWrapper(void *context, const uint8_t *data, uint32_t length)
 {
-    uint16_t current = *next;
-    (*next)++;
-    if (*next == 0U)
-    {
-        *next = 1U;
-    }
-    return current;
-}
-
-/* Radio handles the frame dispatcher needs. It exists because the dispatcher is
- * a plain function pointer: the main loop keeps its buffers, its packet-id
- * counter and its link state on the stack, so they have to be handed over
- * explicitly rather than reached through the enclosing scope, which C does not
- * provide. */
-typedef struct
-{
-    uint8_t *tx;
-    uint32_t capacity;
-    uint16_t *next_packet_id;
-    MqttLinkState *state;
-    uint32_t *last_activity_ms;
-    uint32_t now_ms;
-} ControlRadio;
-
-/* Put everything one received frame owes the wire on the wire.
- *
- * The MQTT session state machine runs first, because the subscription has to be
- * in place before a command can be acted on and because the broker's CONNACK and
- * SUBACK are what move the link into the state where commands are accepted. The
- * control acknowledgements follow.
- *
- * Inside them the order matters. The MQTT PUBACK goes first because it is what
- * stops the broker redelivering a frame that has already been decoded, and the
- * command ACK follows because it answers the question the PUBACK deliberately
- * leaves open — whether the command was understood and carried out. On a send
- * failure part way through, the remaining send is still attempted: a lost command
- * ACK is recoverable by the backend's timeout, whereas a withheld PUBACK costs a
- * redelivery of a command that has already taken effect.
- *
- * Every frame is built into the transmission buffer, which is distinct from the
- * receive buffer the command was decoded out of, so nothing here can be
- * invalidated by the driver collecting the next packet. */
-static bool DispatchFrame(void *context, const MqttPacket *packet,
-                          const ControlOutcome *outcome, const uint8_t *ack_payload)
-{
-    ControlRadio *radio = (ControlRadio *)context;
-    bool sent = true;
-
-    if (*radio->state == MQTT_LINK_WAIT_CONNACK &&
-        packet->type == MQTT_PACKET_CONNACK &&
-        packet->return_code == MQTT_CONNACK_ACCEPTED)
-    {
-        uint32_t length = MqttEncodeSubscribe(radio->tx, radio->capacity,
-                                              MqttTakePacketId(radio->next_packet_id),
-                                              CONTROL_TOPIC_COMMAND, 1U);
-        if (length != 0U && MqttSend(radio->tx, length) != 0U)
-        {
-            *radio->state = MQTT_LINK_WAIT_SUBACK;
-            *radio->last_activity_ms = radio->now_ms;
-        }
-    }
-    else if (*radio->state == MQTT_LINK_WAIT_SUBACK && packet->type == MQTT_PACKET_SUBACK)
-    {
-        *radio->state = MQTT_LINK_ONLINE;
-        *radio->last_activity_ms = radio->now_ms;
-    }
-    else if (packet->type == MQTT_PACKET_PINGRESP)
-    {
-        *radio->last_activity_ms = radio->now_ms;
-    }
-
-    if (outcome->send_puback)
-    {
-        uint32_t length = MqttEncodePuback(radio->tx, radio->capacity,
-                                           outcome->puback_packet_id);
-        if (length == 0U || MqttSend(radio->tx, length) == 0U)
-        {
-            sent = false;
-        }
-    }
-
-    if (outcome->publish_ack)
-    {
-        uint32_t length = MqttEncodePublish(radio->tx, radio->capacity, outcome->ack_topic,
-                                            MqttTakePacketId(radio->next_packet_id), 1U,
-                                            ack_payload, outcome->ack_length);
-        if (length == 0U || MqttSend(radio->tx, length) == 0U)
-        {
-            sent = false;
-        }
-    }
-
-    return sent;
+    (void)context;
+    return MqttSend((uint8_t *)data, length);
 }
 
 int main(void)
@@ -172,7 +74,7 @@ int main(void)
     DisplayInput display;
     EnvEvaluation evaluation;
     ControlLink controlLink;
-    ControlRadio controlRadio;
+    SessionDispatcher sessionDispatcher;
     ESP8266ReceiveStats rxStats;
 
     uint8_t temperature = 0U;
@@ -180,7 +82,6 @@ int main(void)
     uint8_t dhtError;
     uint8_t wifiTaskStatus;
     uint8_t buzzerActive = 0U;
-    MqttLinkState mqttState = MQTT_LINK_TCP;
     uint8_t mqttTx[MQTT_MAX_PACKET_SIZE];
     uint8_t mqttRx[MQTT_MAX_PACKET_SIZE];
     uint8_t controlAck[CONTROL_ACK_SIZE];
@@ -189,7 +90,6 @@ int main(void)
     uint16_t mqttRxLength = 0U;
     uint16_t mqttPacketId = 1U;
     uint32_t telemetrySequence = 0U;
-    uint32_t lastMqttActivityMs = 0U;
 
     uint32_t now_ms = 0U;
     uint32_t tick = 0U;
@@ -271,12 +171,8 @@ int main(void)
      * threshold command is published as applied only after this store has written
      * and verified the record. */
     ControlLinkInit(&controlLink, DEVICE_ID, bootId, &monitor, &thresholdStore);
-    controlRadio.tx = mqttTx;
-    controlRadio.capacity = (uint32_t)sizeof(mqttTx);
-    controlRadio.next_packet_id = &mqttPacketId;
-    controlRadio.state = &mqttState;
-    controlRadio.last_activity_ms = &lastMqttActivityMs;
-    controlRadio.now_ms = 0U;
+    SessionDispatchInit(&sessionDispatcher, mqttTx, (uint32_t)sizeof(mqttTx),
+                        &mqttPacketId, &controlLink, MqttSendWrapper, NULL);
 
     dhtError = DHT11_Init();
     (void)dhtError;
@@ -393,28 +289,35 @@ int main(void)
          * drop every command behind the first one without a trace. Every
          * acknowledgement is built and sent inside the scan, before the driver can
          * collect another segment into the buffer this one came from. */
+        /* Check TCP connection status first so an offline radio immediately marks
+         * ControlLink offline and drops to MQTT_LINK_TCP without waiting an extra cycle. */
+        if (ESP8266_IsTcpConnected() == 0U)
+        {
+            SessionDispatchTcpDisconnected(&sessionDispatcher);
+        }
+        else
+        {
+            SessionDispatchSyncOnline(&sessionDispatcher);
+        }
+
         if (ESP8266_GetPacket(mqttRx, sizeof(mqttRx), &mqttRxLength) != 0U)
         {
-            controlRadio.now_ms = now_ms;
+            sessionDispatcher.now_ms = now_ms;
             /* The acknowledgement counter is the same boot-scoped counter the
              * telemetry frames report, so it is seeded here and read back after
              * the scan: one number space, so the two streams can be ordered
              * against each other. */
             ControlLinkSetSequence(&controlLink, telemetrySequence);
             (void)ControlLinkHandleBuffer(&controlLink, mqttRx, mqttRxLength, now_ms, now_ms,
-                                          controlAck, sizeof(controlAck), DispatchFrame,
-                                          &controlRadio);
+                                          controlAck, sizeof(controlAck), SessionDispatchFrame,
+                                          &sessionDispatcher);
             telemetrySequence = ControlLinkSequence(&controlLink);
         }
 
-        /* The link state is published to the control path every iteration rather
-         * than only on the transition, so the two cannot drift apart after a TCP
-         * drop that the state machine notices and the control path does not. */
-        ControlLinkSetOnline(&controlLink, mqttState == MQTT_LINK_ONLINE);
-
+        /* If TCP dropped during packet handling or send, drop to offline immediately. */
         if (ESP8266_IsTcpConnected() == 0U)
         {
-            mqttState = MQTT_LINK_TCP;
+            SessionDispatchTcpDisconnected(&sessionDispatcher);
         }
 
         if ((tick % UPLINK_PERIOD_TICKS) == 0U)
@@ -425,17 +328,17 @@ int main(void)
                 wifiTaskStatus = ESP8266_Init();
                 (void)wifiTaskStatus;
             }
-            else if (mqttState == MQTT_LINK_TCP && ESP8266_OpenTcp() != 0U)
+            else if (sessionDispatcher.state == MQTT_LINK_TCP && ESP8266_OpenTcp() != 0U)
             {
                 uint32_t length = MqttEncodeConnect(mqttTx, sizeof(mqttTx), DEVICE_ID,
                                                     MQTT_KEEP_ALIVE_SECONDS, "device", 0);
                 if (MqttSend(mqttTx, length) != 0U)
                 {
-                    mqttState = MQTT_LINK_WAIT_CONNACK;
-                    lastMqttActivityMs = now_ms;
+                    sessionDispatcher.state = MQTT_LINK_WAIT_CONNACK;
+                    sessionDispatcher.last_activity_ms = now_ms;
                 }
             }
-            else if (mqttState == MQTT_LINK_ONLINE)
+            else if (sessionDispatcher.state == MQTT_LINK_ONLINE)
             {
                 TelemetryPayload telemetry;
                 uint32_t jsonLength;
@@ -459,25 +362,25 @@ int main(void)
                 telemetry.sensor_fault = ((evaluation.alarm_causes & ENV_ALARM_SENSOR_FAULT) != 0U);
                 jsonLength = TelemetryJsonEncode(&telemetry, telemetryJson, sizeof(telemetryJson));
                 packetLength = MqttEncodePublish(mqttTx, sizeof(mqttTx), "device/telemetry",
-                                                 MqttTakePacketId(&mqttPacketId), 1U,
+                                                 SessionTakePacketId(&mqttPacketId), 1U,
                                                  (const uint8_t *)telemetryJson, jsonLength);
                 if (jsonLength > 0U && MqttSend(mqttTx, packetLength) != 0U)
                 {
                     telemetrySequence++;
-                    lastMqttActivityMs = now_ms;
+                    sessionDispatcher.last_activity_ms = now_ms;
                 }
             }
-            display.network = (mqttState == MQTT_LINK_ONLINE) ?
+            display.network = (sessionDispatcher.state == MQTT_LINK_ONLINE) ?
                               DISPLAY_NETWORK_LINKED : DISPLAY_NETWORK_LINKING;
         }
 
-        if (mqttState == MQTT_LINK_ONLINE &&
-            (now_ms - lastMqttActivityMs) >= (MQTT_KEEP_ALIVE_SECONDS * 500U))
+        if (sessionDispatcher.state == MQTT_LINK_ONLINE &&
+            (now_ms - sessionDispatcher.last_activity_ms) >= (MQTT_KEEP_ALIVE_SECONDS * 500U))
         {
             uint32_t length = MqttEncodePingReq(mqttTx, sizeof(mqttTx));
             if (MqttSend(mqttTx, length) != 0U)
             {
-                lastMqttActivityMs = now_ms;
+                sessionDispatcher.last_activity_ms = now_ms;
             }
         }
 

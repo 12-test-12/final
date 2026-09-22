@@ -47,7 +47,10 @@ CORE_MODULES="\
     $CORE_DIR/telemetry_json.c \
     $CORE_DIR/command_json.c \
     $CORE_DIR/mqtt_packet.c \
-    $CORE_DIR/threshold_store.c"
+    $CORE_DIR/control_link.c \
+    $CORE_DIR/session_dispatch.c \
+    $CORE_DIR/threshold_store.c \
+    $CORE_DIR/boot_id.c"
 
 if ! [ -f "$BUILD_DIR/host_tests" ]; then
     echo "error: '$BUILD_DIR/host_tests' not found; build the test target first" >&2

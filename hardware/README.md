@@ -351,7 +351,10 @@ macOS 预设生成器是 `Unix Makefiles`，因此需要 `make`；Windows 命令
 │   ├── telemetry_json.[ch]       # 遥测 Payload 构造
 │   ├── command_json.[ch]         # 控制命令解析、requestId 去重、ACK 构造
 │   ├── mqtt_packet.[ch]          # MQTT 3.1.1 报文编解码
-│   └── threshold_store.[ch]      # 阈值记录格式、CRC32、双槽读写
+│   ├── control_link.[ch]         # 下行控制链路：校验、去重、执行与 ACK 构造
+│   ├── session_dispatch.[ch]     # MQTT 会话状态机、SUBACK 校验与多帧分发
+│   ├── threshold_store.[ch]      # 阈值记录格式、CRC32、双槽读写
+│   └── boot_id.[ch]              # 启动标识格式化
 ├── tests/                         # 主机单元测试（独立 CMake 工程）
 ├── scripts/host_coverage.sh       # 核心逻辑行覆盖率
 ├── STM32_Project1/               # 主程序、启动文件、外设库和链接脚本
@@ -469,7 +472,7 @@ SWD 直读确认：`TIM1_ARR=0x1f3`（499）、`TIM1_CCR1=0xfa`（250）、`TIM1
 
 ### 本轮未验证 / 受阻
 
-- **Backend 侧 MQTT 会话每 30 秒断开一次**（`connection lost: EOF`，与 keepalive 周期一致），使 `POST/PUT` 控制命令大约一半概率返回 503 `broker_unavailable`。设备侧路径已验证通过，该缺陷属 Backend 模块，需单独分支修复。详见 Multica。
+- **Backend 侧 MQTT 会话每 30 秒断开问题（已由主线修复）**：此前 Backend 因 session 恢复后 backoff 未重置引发的周期性断开（`connection lost: EOF`），已在 PR #21 中合入 main 修复，不再是当前阻塞项。
 - 真实断电（拔电）后的阈值保持未做：本轮用复位验证（记录仍在 Flash）。两槽记录设计本身就是为掉电窗口准备的，但真正的拔电验收仍待做。
 - OLED 的 MUTED 显示由人工确认，不是自动化断言；其渲染逻辑由 `core/display_model.c` 的主机测试覆盖。
 

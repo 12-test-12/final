@@ -189,7 +189,7 @@ MQTT 连接参数：协议 3.1.1（或 5.0），`clientId` 必须等于 `deviceI
 
 **QoS 0 的 `device/control`**：冻结契约规定该主题为 QoS 1。若收到 QoS 0，固件仍会校验并执行，并照常回 command ACK，只是不产生 PUBACK——QoS 0 没有可确认的投递。该分支是防御性的，不是受支持模式。
 
-**离线期间收到的 PUBLISH**：未建立会话（未收到 SUBACK）时，PUBLISH 只回 PUBACK，**不执行**。此类帧在设备上单独计数（`offline_frames`）。
+**离线期间收到的 PUBLISH**：未建立会话（未收到 SUBACK 或 TCP 断开）时，PUBLISH 只回 PUBACK，**不执行**。此类帧在设备上单独计数（`offline_frames`）。当同一个 TCP 接收缓冲中依次包含有效 SUBACK 与控制 PUBLISH 时，固件在确认 SUBACK 有效（状态处于等待 SUBACK、未携带 0x80 失败码、packetId 吻合）后立即切入在线会话，紧随其后的 PUBLISH 立即按在线执行并回复 command ACK，不会被误判为离线丢弃。
 
 ### 4.5.1 接收缓冲的已知限制（不静默丢包）
 
