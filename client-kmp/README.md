@@ -87,7 +87,6 @@ bundle.org.example.client_kmp.monitoring.LabMonitorExports
 | `dashboard()` | 返回 DashboardView JSON |
 | `trends(window, limit)` | 返回 TrendsView JSON（按时间升序）。`window` 为 `LAST_HOUR` / `LAST_SIX_HOURS` / `LAST_DAY`，驱动 `from`/`to` 绝对边界；未知值回落到默认窗口 |
 | `alerts(filter, limit)` | 返回 AlertsView JSON。`filter` 为 `all` / `fire_warning` / `suspect` / `recovered`；未知值回落到 `all` |
-| `alerts(limit)` | 返回 AlertsView JSON |
 | `settings()` | 返回 SettingsView JSON |
 | `commandStatus(requestId)` | 读取命令生命周期 |
 | `awaitCommandOutcome(requestId)` | 等待设备确认；超时返回 `null`（未确认，非失败） |
@@ -316,12 +315,7 @@ MiniApp 侧目前只有 `:shared:miniappTest`（JS 运行时）与 `checkMiniApp
 （微信工程自包含、入口文件、toast 闸门）两类证据，**不构成渲染验收**。解除条件：
 在 DevTools 中开启服务端口后执行 `automator.launch({projectPath: 'client-kmp/miniApp'})` 即可。
 
-**后端阻塞项（非本模块问题）**：`GET /alerts` 返回的 `evidence` 对象用了 PascalCase
-（`GasAdcRise`、`SampleCount`…），而 `docs/api/openapi.yaml` 与 `backend/docs/api.md` 规定的是
-camelCase（`gasAdcRise`…）。因此任何按契约实现的客户端都解析不了告警响应——Android 侧在未
-临时修补后端时显示 `响应解析失败 (HTTP 200)`，这正是共享层对格式错误响应的**正确**错误态。
-上面的告警截图是在**临时**给后端 `AlertEvidence` 补上 json tag 之后拍的，截图完成后该临时
-改动已 `git checkout` 还原（`git status backend/` 为空）；真正的修复属 Backend 模块，需另立分支。
+**后端契约状态**：后端主线已完成字段修复（PR #20 已合入 `main`），`GET /alerts` 返回的 `evidence` 对象严格遵循 `docs/api/openapi.yaml` 与 `backend/docs/api.md` 规范输出 camelCase（`gasAdcRise`、`sampleCount`…）。KMP 共享层运行时已按规范对齐并正确解析，代码与契约已解除阻塞；但本轮修复未重新在真机/模拟器进行端到端渲染复验。
 
 ## 六、当前不支持 / 未完成
 
@@ -342,7 +336,7 @@ camelCase（`gasAdcRise`…）。因此任何按契约实现的客户端都解�
 - **小程序包体积**：见上节「包体积」风险。
 - **微信开发者工具渲染**：未执行（服务端口未开启，见上节验证结果）。
 - **真机（手机）网络联通**：未执行。
-- **告警页数据路径受后端阻塞**：见上节「后端阻塞项」。
+- **端到端告警渲染重验**：后端契约虽已在 `main` 修复对齐，但本分支未重新进行真机/模拟器端到端渲染验收。
 
 ---
 
