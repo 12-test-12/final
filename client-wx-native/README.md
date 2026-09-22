@@ -13,7 +13,17 @@
 - 后续与 KMP 客户端实现相同业务能力，并使用相同 Backend API、硬件数据源和验收场景。
 - 保持微信原生工程方式和真实开发成本，不为了匹配 KMP 目录结构而人为改造。
 - 不依赖 `client-kmp` 的内部实现；跨客户端只共享已确认的外部契约和需求事实。
-- WebSocket 实时订阅、ECharts 折线图与单元测试在后续阶段补齐。
+- 历史趋势折线图已接入原生 Canvas 2D 实现，支持温度、湿度、气体三指标独立 Y 轴缩放（带 10% padding）、气体缺失（null）打断折线段（非零化）、时间比例 X 轴分布以及最多 200 条样本绘制。
+- 单元测试使用 Node.js 原生测试运行器：`node --test tests/trend-chart.test.js`。
+- WebSocket 实时订阅与告警确认在后续阶段补齐。
+
+## Testing & Verification
+
+```sh
+cd client-wx-native
+node --test tests/trend-chart.test.js
+node --check utils/trend-chart.js pages/trends/trends.js services/mock/mock.js
+```
 
 使用微信开发者工具打开本目录即可运行。`project.config.json` 中已有项目配置与团队确认的 AppID；`project.private.config.json` 等本机私有文件不得提交。
 
