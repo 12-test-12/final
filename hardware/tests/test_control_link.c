@@ -255,10 +255,10 @@ static void check_ack(const Capture *capture, const char *status, const char *er
     CHECK_TRUE(test_json_has_string(capture->last_ack, "messageType", "command_ack"));
     CHECK_TRUE(test_json_has_string(capture->last_ack, "deviceId", "MCU001"));
     CHECK_TRUE(test_json_has_string(capture->last_ack, "bootId", "9f3ac21b"));
-    CHECK_MSG(test_json_has_string(capture->last_ack, "status", status), "expected status %s in %s",
-              status, capture->last_ack);
+    CHECK_MSG(test_json_has_string(capture->last_ack, "status", status),
+              "expected status %.32s in %.160s", status, capture->last_ack);
     CHECK_MSG(test_json_has_string(capture->last_ack, "requestId", request_id),
-              "expected requestId %s in %s", request_id, capture->last_ack);
+              "expected requestId %.32s in %.160s", request_id, capture->last_ack);
     CHECK_TRUE(test_json_has_number(capture->last_ack, "timestamp", "null"));
     if (error_code == NULL)
     {
