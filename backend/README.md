@@ -9,10 +9,14 @@
 需要与真实硬件、EMQX 和 `postgres-dev` 一起启动时，优先使用根目录的 [本地启动手册](../docs/local-runbook.md)；本节保留 Backend 单模块运行方式。
 
 ```sh
+cp .env.example .env.local
+# Edit .env.local and replace CHANGE_ME with the postgres-dev password.
 go run .
 ```
 
-默认监听 `:8080`。所有配置来自环境变量，无配置文件。
+启动时直接读取 `backend/.env.local`，缺失时拒绝启动并提示从
+`.env.example` 复制。`.env.example` 是已提交的完整模板；`.env.local` 包含本机
+密码与地址，已被 Git 忽略。默认监听 `:8080`。
 
 最小可用（无数据库、无 Broker，仅提供 HTTP 与健康检查）：
 
@@ -21,19 +25,19 @@ go run .
 curl http://localhost:8080/healthz
 ```
 
-接入 PostgreSQL 与 EMQX 的本地示例：
+接入 PostgreSQL 与 EMQX 时编辑 `.env.local`：
 
-```sh
-export DATABASE_URL='postgres://postgres:password@localhost:5432/lab?sslmode=disable'
-export MQTT_BROKER_URL='localhost:1883'
-export MQTT_USERNAME='backend'
-export MQTT_PASSWORD='<broker-password>'
-export AUTH_MODE='bearer'
-export AUTH_TOKENS='<token>:<operator-name>'
-go run .
+```dotenv
+DATABASE_URL=postgres://postgres:<existing-password>@localhost:5432/lab?sslmode=disable
+MQTT_BROKER_URL=localhost:1883
+MQTT_USERNAME=backend
+MQTT_PASSWORD=backend-secret
+AUTH_MODE=none
 ```
 
-完整变量表见 [`docs/api.md`](docs/api.md) §13。**非法值会导致启动失败，不会静默回退到默认值。**
+完整字段表见 [`docs/api.md`](docs/api.md) §13。**未知、重复或非法字段会导致
+启动失败，不会静默回退。** 部署或测试可仅用
+`BACKEND_CONFIG_FILE=/path/to/file go run .` 选择其他文件；它不覆盖文件内字段。
 
 启动日志会对以下情况记录 WARN，因为它们在本地可用但不适合无人值守部署：`AUTH_MODE=none`、使用内存存储、未配置 Broker。
 
@@ -81,7 +85,7 @@ backend/
 ├── contract_test.go           与 docs/api/openapi.yaml、docs/device-protocol.md 交叉校验
 └── internal/
     ├── app/                   组合根：装配全部依赖并运行
-    ├── config/                环境变量配置与校验
+    ├── config/                dotenv 配置加载与校验
     ├── domain/                纯领域模型与范围校验（无 I/O 依赖）
     ├── protocol/              MQTT 报文编解码（严格模式）
     ├── mqtt/                  标准库 MQTT 3.1.1 子集客户端

@@ -1,13 +1,11 @@
-// Package config loads the backend configuration from the environment.
-//
-// Configuration is environment-only. Secrets never come from checked-in files,
-// and the process refuses to start on a value it cannot interpret rather than
-// silently falling back to a default that would change safety behaviour.
+// Package config loads the backend configuration from a local dotenv file.
 package config
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strconv"
@@ -17,6 +15,27 @@ import (
 	"github.com/BobcGn/final/backend/internal/alert"
 	"github.com/BobcGn/final/backend/internal/liveness"
 )
+
+const (
+	// DefaultFile is the local, git-ignored configuration read at startup.
+	DefaultFile = ".env.local"
+	// FilePathEnv selects another dotenv file without overriding its values.
+	FilePathEnv = "BACKEND_CONFIG_FILE"
+)
+
+type valueSource func(string) string
+
+var knownKeys = map[string]struct{}{
+	"BACKEND_ADDR": {}, "DATABASE_URL": {}, "MQTT_BROKER_URL": {},
+	"MQTT_USERNAME": {}, "MQTT_PASSWORD": {}, "MQTT_CLIENT_ID": {},
+	"MQTT_TLS": {}, "MQTT_KEEPALIVE_SECONDS": {}, "AUTH_MODE": {},
+	"AUTH_TOKENS": {}, "DEVICE_ALLOWLIST": {}, "OFFLINE_AFTER_SECONDS": {},
+	"COMMAND_TTL_SECONDS": {}, "SWEEP_INTERVAL_SECONDS": {},
+	"ALERT_WINDOW_SECONDS": {}, "ALERT_MIN_SAMPLES": {},
+	"ALERT_MIN_DURATION_SECONDS": {}, "ALERT_GAS_RISE_ADC": {},
+	"ALERT_TEMP_RATE_C_PER_MIN": {}, "ALERT_RECOVERY_HOLD_SECONDS": {},
+	"MAX_WS_CLIENTS": {}, "LOG_LEVEL": {},
+}
 
 // Config is the fully validated process configuration.
 type Config struct {
@@ -62,65 +81,151 @@ type Config struct {
 	LogLevel slog.Level
 }
 
-// Load reads and validates the configuration from the process environment.
+// Load reads and validates .env.local, or the path selected by
+// BACKEND_CONFIG_FILE. Configuration values come from the file, not from the
+// surrounding shell environment.
 func Load() (Config, error) {
+	path := strings.TrimSpace(os.Getenv(FilePathEnv))
+	if path == "" {
+		path = DefaultFile
+	}
+	return LoadFile(path)
+}
+
+// LoadFile reads and validates one dotenv configuration file.
+func LoadFile(path string) (Config, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Config{}, fmt.Errorf("config: %s not found; copy .env.example to .env.local", path)
+		}
+		return Config{}, fmt.Errorf("config: open %s: %w", path, err)
+	}
+	defer file.Close()
+
+	values, err := parseDotEnv(file)
+	if err != nil {
+		return Config{}, fmt.Errorf("config: parse %s: %w", path, err)
+	}
+	return loadFrom(func(key string) string { return values[key] })
+}
+
+// LoadEnvironment is retained for tests and embedding callers that explicitly
+// provide process environment configuration. The service executable uses Load.
+func LoadEnvironment() (Config, error) {
+	return loadFrom(os.Getenv)
+}
+
+func loadFrom(source valueSource) (Config, error) {
 	cfg := Config{
-		Addr:         envString("BACKEND_ADDR", ":8080"),
-		DatabaseURL:  strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		BrokerURL:    strings.TrimSpace(os.Getenv("MQTT_BROKER_URL")),
-		BrokerUser:   os.Getenv("MQTT_USERNAME"),
-		BrokerPass:   os.Getenv("MQTT_PASSWORD"),
-		MQTTClientID: envString("MQTT_CLIENT_ID", "lab-backend"),
+		Addr:         sourceString(source, "BACKEND_ADDR", ":8080"),
+		DatabaseURL:  strings.TrimSpace(source("DATABASE_URL")),
+		BrokerURL:    strings.TrimSpace(source("MQTT_BROKER_URL")),
+		BrokerUser:   source("MQTT_USERNAME"),
+		BrokerPass:   source("MQTT_PASSWORD"),
+		MQTTClientID: sourceString(source, "MQTT_CLIENT_ID", "lab-backend"),
 		Alert:        alert.DefaultConfig(),
-		AuthMode:     envString("AUTH_MODE", "none"),
+		AuthMode:     sourceString(source, "AUTH_MODE", "none"),
 	}
 
 	var err error
-	if cfg.MaxWebSocketClients, err = envIntErr("MAX_WS_CLIENTS", 128); err != nil {
+	if cfg.MaxWebSocketClients, err = sourceInt(source, "MAX_WS_CLIENTS", 128); err != nil {
 		return Config{}, err
 	}
-	if cfg.BrokerTLS, err = envBool("MQTT_TLS", false); err != nil {
+	if cfg.BrokerTLS, err = sourceBool(source, "MQTT_TLS", false); err != nil {
 		return Config{}, err
 	}
-	if cfg.MQTTKeepAlive, err = envDuration("MQTT_KEEPALIVE_SECONDS", 30*time.Second); err != nil {
+	if cfg.MQTTKeepAlive, err = sourceDuration(source, "MQTT_KEEPALIVE_SECONDS", 30*time.Second); err != nil {
 		return Config{}, err
 	}
-	if cfg.OfflineAfter, err = envDuration("OFFLINE_AFTER_SECONDS", liveness.DefaultConfig().OfflineAfter); err != nil {
+	if cfg.OfflineAfter, err = sourceDuration(source, "OFFLINE_AFTER_SECONDS", liveness.DefaultConfig().OfflineAfter); err != nil {
 		return Config{}, err
 	}
-	if cfg.CommandTTL, err = envDuration("COMMAND_TTL_SECONDS", 60*time.Second); err != nil {
+	if cfg.CommandTTL, err = sourceDuration(source, "COMMAND_TTL_SECONDS", 60*time.Second); err != nil {
 		return Config{}, err
 	}
-	if cfg.SweepInterval, err = envDuration("SWEEP_INTERVAL_SECONDS", 5*time.Second); err != nil {
+	if cfg.SweepInterval, err = sourceDuration(source, "SWEEP_INTERVAL_SECONDS", 5*time.Second); err != nil {
 		return Config{}, err
 	}
-	if cfg.Alert.Window, err = envDuration("ALERT_WINDOW_SECONDS", cfg.Alert.Window); err != nil {
+	if cfg.Alert.Window, err = sourceDuration(source, "ALERT_WINDOW_SECONDS", cfg.Alert.Window); err != nil {
 		return Config{}, err
 	}
-	if cfg.Alert.MinDuration, err = envDuration("ALERT_MIN_DURATION_SECONDS", cfg.Alert.MinDuration); err != nil {
+	if cfg.Alert.MinDuration, err = sourceDuration(source, "ALERT_MIN_DURATION_SECONDS", cfg.Alert.MinDuration); err != nil {
 		return Config{}, err
 	}
-	if cfg.Alert.RecoveryHold, err = envDuration("ALERT_RECOVERY_HOLD_SECONDS", cfg.Alert.RecoveryHold); err != nil {
+	if cfg.Alert.RecoveryHold, err = sourceDuration(source, "ALERT_RECOVERY_HOLD_SECONDS", cfg.Alert.RecoveryHold); err != nil {
 		return Config{}, err
 	}
-	if cfg.Alert.MinSamples, err = envIntErr("ALERT_MIN_SAMPLES", cfg.Alert.MinSamples); err != nil {
+	if cfg.Alert.MinSamples, err = sourceInt(source, "ALERT_MIN_SAMPLES", cfg.Alert.MinSamples); err != nil {
 		return Config{}, err
 	}
-	if cfg.Alert.GasAdcRiseThreshold, err = envIntErr("ALERT_GAS_RISE_ADC", cfg.Alert.GasAdcRiseThreshold); err != nil {
+	if cfg.Alert.GasAdcRiseThreshold, err = sourceInt(source, "ALERT_GAS_RISE_ADC", cfg.Alert.GasAdcRiseThreshold); err != nil {
 		return Config{}, err
 	}
-	if cfg.Alert.TemperatureRateThresholdCPerMinute, err = envFloat("ALERT_TEMP_RATE_C_PER_MIN", cfg.Alert.TemperatureRateThresholdCPerMinute); err != nil {
+	if cfg.Alert.TemperatureRateThresholdCPerMinute, err = sourceFloat(source, "ALERT_TEMP_RATE_C_PER_MIN", cfg.Alert.TemperatureRateThresholdCPerMinute); err != nil {
 		return Config{}, err
 	}
-	if cfg.LogLevel, err = parseLevel(envString("LOG_LEVEL", "info")); err != nil {
+	if cfg.LogLevel, err = parseLevel(sourceString(source, "LOG_LEVEL", "info")); err != nil {
 		return Config{}, err
 	}
-	if cfg.AuthTokens, err = parseTokens(os.Getenv("AUTH_TOKENS")); err != nil {
+	if cfg.AuthTokens, err = parseTokens(source("AUTH_TOKENS")); err != nil {
 		return Config{}, err
 	}
-	cfg.AllowedDevices = splitList(os.Getenv("DEVICE_ALLOWLIST"))
+	cfg.AllowedDevices = splitList(source("DEVICE_ALLOWLIST"))
 
 	return cfg, cfg.Validate()
+}
+
+func parseDotEnv(reader io.Reader) (map[string]string, error) {
+	values := make(map[string]string)
+	scanner := bufio.NewScanner(reader)
+	for lineNumber := 1; scanner.Scan(); lineNumber++ {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+		key, raw, found := strings.Cut(line, "=")
+		key = strings.TrimSpace(key)
+		if !found || key == "" {
+			return nil, fmt.Errorf("line %d must be KEY=VALUE", lineNumber)
+		}
+		if _, duplicate := values[key]; duplicate {
+			return nil, fmt.Errorf("line %d duplicates %s", lineNumber, key)
+		}
+		if _, known := knownKeys[key]; !known {
+			return nil, fmt.Errorf("line %d contains unknown key %s", lineNumber, key)
+		}
+		value, err := parseDotEnvValue(strings.TrimSpace(raw))
+		if err != nil {
+			return nil, fmt.Errorf("line %d %s: %w", lineNumber, key, err)
+		}
+		values[key] = value
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+func parseDotEnvValue(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	if raw[0] == '\'' {
+		if len(raw) < 2 || raw[len(raw)-1] != '\'' {
+			return "", errors.New("unterminated single-quoted value")
+		}
+		return raw[1 : len(raw)-1], nil
+	}
+	if raw[0] == '"' {
+		value, err := strconv.Unquote(raw)
+		if err != nil {
+			return "", fmt.Errorf("invalid quoted value: %w", err)
+		}
+		return value, nil
+	}
+	return raw, nil
 }
 
 // Validate rejects combinations that would run in an unsafe configuration.
@@ -214,19 +319,19 @@ func describePresence(present bool) string {
 	return "not configured"
 }
 
-// envString reads a string variable with a default.
-func envString(key, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+// sourceString reads a string setting with a default.
+func sourceString(source valueSource, key, fallback string) string {
+	if value := strings.TrimSpace(source(key)); value != "" {
 		return value
 	}
 	return fallback
 }
 
-// envIntErr reads an integer variable, reporting a malformed value rather than
+// sourceInt reads an integer setting, reporting a malformed value rather than
 // falling back to a default: a typo in a numeric setting must not silently change
 // behaviour.
-func envIntErr(key string, fallback int) (int, error) {
-	raw := strings.TrimSpace(os.Getenv(key))
+func sourceInt(source valueSource, key string, fallback int) (int, error) {
+	raw := strings.TrimSpace(source(key))
 	if raw == "" {
 		return fallback, nil
 	}
@@ -237,9 +342,9 @@ func envIntErr(key string, fallback int) (int, error) {
 	return value, nil
 }
 
-// envFloat reads a float variable with a default.
-func envFloat(key string, fallback float64) (float64, error) {
-	raw := strings.TrimSpace(os.Getenv(key))
+// sourceFloat reads a float setting with a default.
+func sourceFloat(source valueSource, key string, fallback float64) (float64, error) {
+	raw := strings.TrimSpace(source(key))
 	if raw == "" {
 		return fallback, nil
 	}
@@ -250,9 +355,9 @@ func envFloat(key string, fallback float64) (float64, error) {
 	return value, nil
 }
 
-// envBool reads a boolean variable with a default.
-func envBool(key string, fallback bool) (bool, error) {
-	raw := strings.TrimSpace(os.Getenv(key))
+// sourceBool reads a boolean setting with a default.
+func sourceBool(source valueSource, key string, fallback bool) (bool, error) {
+	raw := strings.TrimSpace(source(key))
 	if raw == "" {
 		return fallback, nil
 	}
@@ -263,9 +368,9 @@ func envBool(key string, fallback bool) (bool, error) {
 	return value, nil
 }
 
-// envDuration reads a whole-second duration variable with a default.
-func envDuration(key string, fallback time.Duration) (time.Duration, error) {
-	raw := strings.TrimSpace(os.Getenv(key))
+// sourceDuration reads a whole-second duration setting with a default.
+func sourceDuration(source valueSource, key string, fallback time.Duration) (time.Duration, error) {
+	raw := strings.TrimSpace(source(key))
 	if raw == "" {
 		return fallback, nil
 	}

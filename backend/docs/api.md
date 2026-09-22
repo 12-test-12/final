@@ -412,7 +412,7 @@ accepted → published → applied
 
 ## 12. 复合火情预警算法
 
-参数（`ALERT_*` 环境变量可覆盖，见 §13）：
+参数（可由 dotenv 中的 `ALERT_*` 字段设置，见 §13）：
 
 | Parameter | Default | Meaning |
 | --- | --- | --- |
@@ -454,9 +454,11 @@ confirmed = gasSurge && rapidRise && sampleCount >= MIN_SAMPLES && span >= MIN_D
 
 ## 13. Configuration
 
-全部通过环境变量提供；无配置文件。
+进程启动时直接读取 `backend/.env.local`。已提交的 `backend/.env.example`
+是完整模板，`.env.local` 保存本机密码与地址并被 Git 忽略。可用
+`BACKEND_CONFIG_FILE` 选择另一个 dotenv 文件，但其他 shell 环境变量不覆盖文件内容。
 
-| Variable | Default | Meaning |
+| Field | Default | Meaning |
 | --- | --- | --- |
 | `BACKEND_ADDR` | `:8080` | HTTP 监听地址 |
 | `DATABASE_URL` | 空 | PostgreSQL DSN。**为空时使用内存存储，重启丢失全部数据，仅用于开发** |
@@ -475,7 +477,10 @@ confirmed = gasSurge && rapidRise && sampleCount >= MIN_SAMPLES && span >= MIN_D
 | `LOG_LEVEL` | `info` | `debug`、`info`、`warn`、`error` |
 | `ALERT_*` | 见 §12 | 复合预警参数 |
 
-**非法值一律导致启动失败**，不会回退到默认值：静默回退会让一次笔误变成现场行为变化。启动日志会记录脱敏后的配置，并对 `AUTH_MODE=none`、内存存储、未配置 Broker 三种情况分别打 WARN。
+dotenv 支持空行、整行 `#` 注释、`export KEY=VALUE`、单引号和双引号值。
+**未知键、重复键、格式错误或非法值一律导致启动失败**，不会静默回退。
+启动日志会记录脱敏后的配置，并对 `AUTH_MODE=none`、内存存储、未配置
+Broker 三种情况分别打 WARN。
 
 `DEVICE_ALLOWLIST` 存在的理由：首期主题固定为 `device/telemetry`，主题本身无法表达"哪个设备允许发布"，因此设备身份只能由 Payload 声明。在按设备凭据与 ACL 就位之前，该白名单是应用层的替代措施。
 

@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // TestRunReturnsConfigurationErrors verifies that a configuration the loader
 // rejects stops the process with an error instead of starting a service with
@@ -10,7 +14,11 @@ import "testing"
 // through the composition root in internal/app, where Run is exercisable with a
 // cancellable context.
 func TestRunReturnsConfigurationErrors(t *testing.T) {
-	t.Setenv("AUTH_MODE", "kerberos")
+	path := filepath.Join(t.TempDir(), ".env.local")
+	if err := os.WriteFile(path, []byte("AUTH_MODE=kerberos\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("BACKEND_CONFIG_FILE", path)
 
 	err := run()
 	if err == nil {

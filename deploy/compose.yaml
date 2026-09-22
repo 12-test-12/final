@@ -6,9 +6,9 @@
 # Usage:
 #   docker start postgres-dev
 #   docker compose -f deploy/compose.yaml up -d emqx
-#   DATABASE_URL='postgres://postgres:<existing-password>@localhost:5432/lab?sslmode=disable' \
-#   MQTT_BROKER_URL='localhost:1883' MQTT_USERNAME=backend MQTT_PASSWORD=backend-secret \
-#     go run ./backend
+#   cd backend
+#   cp .env.example .env.local
+#   # Set the postgres-dev password in .env.local, then run: go run .
 #
 # See docs/integration-testing.md for the full acceptance run.
 

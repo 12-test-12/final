@@ -1,12 +1,127 @@
 package config_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/BobcGn/final/backend/internal/config"
 )
+
+func writeConfig(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), ".env.local")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return path
+}
+
+// TestLoadFile verifies dotenv comments, export syntax, quoting and blank
+// secrets while proving shell variables do not override file values.
+func TestLoadFile(t *testing.T) {
+	t.Setenv("BACKEND_ADDR", ":9999")
+	path := writeConfig(t, `
+# Local backend settings
+export BACKEND_ADDR=":8181"
+DATABASE_URL='postgres://postgres:secret@localhost:5432/lab?sslmode=disable'
+MQTT_BROKER_URL=localhost:1883
+MQTT_USERNAME=backend
+MQTT_PASSWORD=
+AUTH_MODE=none
+DEVICE_ALLOWLIST=MCU001, MCU002
+`)
+
+	cfg, err := config.LoadFile(path)
+	if err != nil {
+		t.Fatalf("load file: %v", err)
+	}
+	if cfg.Addr != ":8181" {
+		t.Fatalf("Addr = %q, shell environment overrode the file", cfg.Addr)
+	}
+	if cfg.DatabaseURL == "" || cfg.BrokerURL != "localhost:1883" {
+		t.Fatalf("file values were not loaded: %+v", cfg.Redacted())
+	}
+	if len(cfg.AllowedDevices) != 2 || cfg.AllowedDevices[1] != "MCU002" {
+		t.Fatalf("allowlist = %v", cfg.AllowedDevices)
+	}
+}
+
+// TestLoadFileRejectsInvalidDotEnv prevents a typo or duplicate from silently
+// changing runtime behaviour.
+func TestLoadFileRejectsInvalidDotEnv(t *testing.T) {
+	cases := map[string]string{
+		"unknown key":       "BACKEND_ADR=:8080\n",
+		"duplicate key":     "BACKEND_ADDR=:8080\nBACKEND_ADDR=:8081\n",
+		"missing separator": "BACKEND_ADDR :8080\n",
+		"broken quote":      "BACKEND_ADDR=\":8080\n",
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := config.LoadFile(writeConfig(t, content)); err == nil {
+				t.Fatal("invalid dotenv file was accepted")
+			}
+		})
+	}
+}
+
+func TestLoadFileReportsMissingLocalFile(t *testing.T) {
+	_, err := config.LoadFile(filepath.Join(t.TempDir(), ".env.local"))
+	if err == nil || !strings.Contains(err.Error(), "copy .env.example to .env.local") {
+		t.Fatalf("missing file error = %v", err)
+	}
+}
+
+// TestExampleFileIsValid keeps the checked-in template synchronized with the
+// parser and every validation rule.
+func TestExampleFileIsValid(t *testing.T) {
+	cfg, err := config.LoadFile("../../.env.example")
+	if err != nil {
+		t.Fatalf("load .env.example: %v", err)
+	}
+	if cfg.Addr != ":8080" || cfg.MQTTClientID != "lab-backend" {
+		t.Fatalf("unexpected example configuration: %+v", cfg.Redacted())
+	}
+}
+
+func TestLoadUsesSelectedFile(t *testing.T) {
+	path := writeConfig(t, "BACKEND_ADDR=:8181\n")
+	t.Setenv(config.FilePathEnv, path)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load selected file: %v", err)
+	}
+	if cfg.Addr != ":8181" {
+		t.Fatalf("Addr = %q", cfg.Addr)
+	}
+}
+
+func TestLoadUsesDefaultLocalFile(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, config.DefaultFile), []byte("BACKEND_ADDR=:8282\n"), 0o600); err != nil {
+		t.Fatalf("write default file: %v", err)
+	}
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	if err := os.Chdir(directory); err != nil {
+		t.Fatalf("change directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(workingDirectory) })
+	t.Setenv(config.FilePathEnv, "")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load default file: %v", err)
+	}
+	if cfg.Addr != ":8282" {
+		t.Fatalf("Addr = %q", cfg.Addr)
+	}
+}
 
 // setEnv sets the environment for one test and restores it afterwards.
 func setEnv(t *testing.T, values map[string]string) {
@@ -23,7 +138,7 @@ func setEnv(t *testing.T, values map[string]string) {
 func TestLoadDefaults(t *testing.T) {
 	clearAll(t)
 
-	cfg, err := config.Load()
+	cfg, err := config.LoadEnvironment()
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -89,7 +204,7 @@ func TestLoadFromEnvironment(t *testing.T) {
 		"LOG_LEVEL":                   "debug",
 	})
 
-	cfg, err := config.Load()
+	cfg, err := config.LoadEnvironment()
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -140,13 +255,18 @@ func TestLoadRejectsUnsafeAndMalformedValues(t *testing.T) {
 		"empty actor":                 {"AUTH_MODE": "bearer", "AUTH_TOKENS": "tok1:"},
 		"offline below three reports": {"OFFLINE_AFTER_SECONDS": "10"},
 		"zero command ttl":            {"COMMAND_TTL_SECONDS": "0"},
+		"zero mqtt keepalive":         {"MQTT_KEEPALIVE_SECONDS": "0"},
 		"zero sweep interval":         {"SWEEP_INTERVAL_SECONDS": "0"},
+		"negative websocket limit":    {"MAX_WS_CLIENTS": "-1"},
 		"non-numeric limit":           {"MAX_WS_CLIENTS": "many"},
 		"non-boolean tls":             {"MQTT_TLS": "maybe"},
 		"non-numeric duration":        {"OFFLINE_AFTER_SECONDS": "soon"},
 		"alert min samples below two": {"ALERT_MIN_SAMPLES": "1"},
 		"alert window of zero":        {"ALERT_WINDOW_SECONDS": "0"},
+		"alert duration above window": {"ALERT_WINDOW_SECONDS": "5", "ALERT_MIN_DURATION_SECONDS": "6"},
+		"negative recovery hold":      {"ALERT_RECOVERY_HOLD_SECONDS": "-1"},
 		"alert slope of zero":         {"ALERT_TEMP_RATE_C_PER_MIN": "0"},
+		"non-numeric alert slope":     {"ALERT_TEMP_RATE_C_PER_MIN": "fast"},
 		"alert gas rise above range":  {"ALERT_GAS_RISE_ADC": "5000"},
 		"unknown log level":           {"LOG_LEVEL": "verbose"},
 		"client id too long":          {"MQTT_CLIENT_ID": "0123456789012345678901234"},
@@ -155,7 +275,7 @@ func TestLoadRejectsUnsafeAndMalformedValues(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			clearAll(t)
 			setEnv(t, values)
-			if _, err := config.Load(); err == nil {
+			if _, err := config.LoadEnvironment(); err == nil {
 				t.Fatalf("%s was accepted", name)
 			}
 		})
@@ -174,7 +294,7 @@ func TestRedactedHidesSecrets(t *testing.T) {
 		"AUTH_TOKENS":     "supersecret:alice",
 	})
 
-	cfg, err := config.Load()
+	cfg, err := config.LoadEnvironment()
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -201,7 +321,7 @@ func TestAllowlistAndTokensIgnoreBlankEntries(t *testing.T) {
 		"AUTH_TOKENS":      " tok1:alice , , tok2:bob ",
 	})
 
-	cfg, err := config.Load()
+	cfg, err := config.LoadEnvironment()
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
