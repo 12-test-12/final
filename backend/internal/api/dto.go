@@ -170,32 +170,6 @@ func newAlertEventResource(event domain.AlertEvent) alertEventResource {
 	}
 }
 
-// AlertEventResourceForTypeTest returns a zero alertEventResource so a test can
-// reflect over its field types. It exists for the guard that keeps
-// domain.AlertEvidence from being embedded in a wire type again.
-func AlertEventResourceForTypeTest() alertEventResource {
-	return alertEventResource{}
-}
-
-// NewAlertEventResourceForTest exports the alert-to-wire mapping so the wire
-// shape can be asserted from outside the package. It exists for the raw-key
-// contract tests only: those must observe the bytes the handler writes, and a
-// test in another package cannot reach an unexported mapper.
-func NewAlertEventResourceForTest(event domain.AlertEvent) alertEventResource {
-	return newAlertEventResource(event)
-}
-
-// NewAlertPageResourceForTest exports the page mapping for the same reason:
-// the raw-key contract tests decode the exact bytes GET /alerts writes, which
-// means they need the page shape and not only the row shape.
-func NewAlertPageResourceForTest(events []domain.AlertEvent) alertPage {
-	items := make([]alertEventResource, 0, len(events))
-	for _, event := range events {
-		items = append(items, newAlertEventResource(event))
-	}
-	return alertPage{Items: items, NextCursor: nil}
-}
-
 // alertPage is one page of alert episodes.
 type alertPage struct {
 	Items      []alertEventResource `json:"items"`
