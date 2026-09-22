@@ -112,14 +112,50 @@ type telemetryPage struct {
 	NextCursor *string          `json:"nextCursor"`
 }
 
+// alertEvidenceResource is the wire shape of an alert's trigger evidence.
+//
+// It exists rather than marshalling domain.AlertEvidence directly, for one
+// reason: the domain type has no JSON tags, so encoding/json would emit its
+// exported Go names — GasAdcRise, SampleCount and so on. docs/api/openapi.yaml
+// fixes the names as camelCase, and every client decodes them by those names.
+// A domain type is a statement about the business; a wire type is a statement
+// about a contract. Keeping them separate is what stops a rename in one from
+// silently breaking the other.
+//
+// All six fields are always emitted. The contract marks only three of them
+// required, so a reader must still cope with a future where the other three
+// become optional — but this backend never omits any of them.
+type alertEvidenceResource struct {
+	GasAdcRise                         int     `json:"gasAdcRise"`
+	GasAdcRiseThreshold                int     `json:"gasAdcRiseThreshold"`
+	TemperatureRateCPerMinute          float64 `json:"temperatureRateCPerMinute"`
+	TemperatureRateThresholdCPerMinute float64 `json:"temperatureRateThresholdCPerMinute"`
+	SampleCount                        int     `json:"sampleCount"`
+	WindowSeconds                      int     `json:"windowSeconds"`
+}
+
+// newAlertEvidenceResource maps the stored evidence onto its wire shape. The
+// values are copied field by field so that adding a field to the domain type
+// cannot silently start appearing on the wire.
+func newAlertEvidenceResource(evidence domain.AlertEvidence) alertEvidenceResource {
+	return alertEvidenceResource{
+		GasAdcRise:                         evidence.GasAdcRise,
+		GasAdcRiseThreshold:                evidence.GasAdcRiseThreshold,
+		TemperatureRateCPerMinute:          evidence.TemperatureRateCPerMinute,
+		TemperatureRateThresholdCPerMinute: evidence.TemperatureRateThresholdCPerMinute,
+		SampleCount:                        evidence.SampleCount,
+		WindowSeconds:                      evidence.WindowSeconds,
+	}
+}
+
 // alertEventResource is one alert episode in an API response.
 type alertEventResource struct {
-	ID        string               `json:"id"`
-	DeviceID  string               `json:"deviceId"`
-	State     domain.AlertState    `json:"state"`
-	StartedAt time.Time            `json:"startedAt"`
-	EndedAt   *time.Time           `json:"endedAt"`
-	Evidence  domain.AlertEvidence `json:"evidence"`
+	ID        string                `json:"id"`
+	DeviceID  string                `json:"deviceId"`
+	State     domain.AlertState     `json:"state"`
+	StartedAt time.Time             `json:"startedAt"`
+	EndedAt   *time.Time            `json:"endedAt"`
+	Evidence  alertEvidenceResource `json:"evidence"`
 }
 
 // newAlertEventResource converts a stored alert into its API representation.
@@ -130,8 +166,34 @@ func newAlertEventResource(event domain.AlertEvent) alertEventResource {
 		State:     event.State,
 		StartedAt: timestamp(event.StartedAt),
 		EndedAt:   timestampPtr(event.EndedAt),
-		Evidence:  event.Evidence,
+		Evidence:  newAlertEvidenceResource(event.Evidence),
 	}
+}
+
+// AlertEventResourceForTypeTest returns a zero alertEventResource so a test can
+// reflect over its field types. It exists for the guard that keeps
+// domain.AlertEvidence from being embedded in a wire type again.
+func AlertEventResourceForTypeTest() alertEventResource {
+	return alertEventResource{}
+}
+
+// NewAlertEventResourceForTest exports the alert-to-wire mapping so the wire
+// shape can be asserted from outside the package. It exists for the raw-key
+// contract tests only: those must observe the bytes the handler writes, and a
+// test in another package cannot reach an unexported mapper.
+func NewAlertEventResourceForTest(event domain.AlertEvent) alertEventResource {
+	return newAlertEventResource(event)
+}
+
+// NewAlertPageResourceForTest exports the page mapping for the same reason:
+// the raw-key contract tests decode the exact bytes GET /alerts writes, which
+// means they need the page shape and not only the row shape.
+func NewAlertPageResourceForTest(events []domain.AlertEvent) alertPage {
+	items := make([]alertEventResource, 0, len(events))
+	for _, event := range events {
+		items = append(items, newAlertEventResource(event))
+	}
+	return alertPage{Items: items, NextCursor: nil}
 }
 
 // alertPage is one page of alert episodes.

@@ -244,6 +244,20 @@ Health:    /healthz
 
 事件在触发时写入证据，**不会**在读取时重算。客户端不能用当前实时值反推历史告警原因。气体项以 ADC 码而非 ppm 表示：估算浓度未标定、`gasPpm` 可能缺失，而增量本身在未标定时仍然有效。
 
+### 7.1 evidence 字段名必须是 lowerCamelCase
+
+上例中的六个键名与 `../docs/api/openapi.yaml` 的 `AlertEvidence` 一致，**必须**原样使用：
+
+`gasAdcRise`、`gasAdcRiseThreshold`、`temperatureRateCPerMinute`、`temperatureRateThresholdCPerMinute`、`sampleCount`、`windowSeconds`。
+
+约束与边界：
+
+- **不接受 Go 导出名**（`GasAdcRise`、`SampleCount`…）。本服务曾把 `domain.AlertEvidence` 直接序列化到线上，输出的就是 PascalCase，任何按契约实现的客户端都解析不了。现已改为在 REST 与事件两条边界各用带显式 `json` 标签的 DTO（`internal/api/dto.go` 的 `alertEvidenceResource`、`internal/events/events.go` 的 `AlertEvidenceData`）。
+- **不保留 PascalCase 别名**，两套键名不会同时出现。历史上的 PascalCase 输出**不属于兼容契约**，不构成兼容性承诺。
+- 事实源是 `../docs/api/openapi.yaml`；实现不得反过来去改契约以迎合错误的输出。
+- 该约束由测试强制：`internal/api/evidence_keys_test.go` 对**原始响应体**断言六个 camelCase 键存在、六个 PascalCase 键不存在（只解码到 Go struct 是看不出这件事的，因为 `encoding/json` 对键名匹配较宽松）；`contract_test.go` 把实现的键名集合与 `AlertEvidence.properties` 对齐。
+- `AlertEvidence.required` 只列了 `gasAdcRise`、`temperatureRateCPerMinute`、`sampleCount` 三项。这是「读者必须容忍其缺失」的保守声明，不是本服务的保证：本服务**六项总是输出**（`domain.AlertEvidence` 无可选成员，触发时即全部写入）。客户端应把另外三项视为可选来解析。见 `TestAlertEvidenceRequiredMatchesWhatTheBackendGuarantees`。
+
 每台设备**至多一个未结束事件**（数据库部分唯一索引强制）。
 
 ## 8. Thresholds
