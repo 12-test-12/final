@@ -15,7 +15,7 @@ class TrendChartGeometryTest {
         temp: Double = 25.0,
         hum: Double = 50.0,
         gas: Double? = 30.0,
-        epochMs: Long = 1000L,
+        epochMs: Long? = 1000L,
     ): TrendPointView = TrendPointView(
         key = key,
         receivedAt = receivedAt,
@@ -154,19 +154,25 @@ class TrendChartGeometryTest {
             samplePoint(key = "p2", epochMs = 1000L),
             samplePoint(key = "p3", epochMs = 1000L),
         )
-        val layout = TrendChartGeometry.compute(pts, width = 300f, height = 200f)
+        val layout = TrendChartGeometry.compute(pts, width = 300f, height = 200f, padLeft = 0f, padRight = 0f)
         val tempSeg = layout.temperatureSeries.segments.single()
         assertEquals(3, tempSeg.size)
-        // Check no NaN
-        for (p in tempSeg) {
-            assertFalse(p.x.isNaN())
-            assertFalse(p.y.isNaN())
-        }
+        // All-equal timestamps have a zero span: the whole series falls back to
+        // uniform index spacing rather than time-proportional mapping.
+        assertFalse(layout.usesTimeScale, "zero time span must degrade to uniform spacing")
+        val step = 300f / 2
+        assertEquals(0f, tempSeg[0].x, 0.1f)
+        assertEquals(step, tempSeg[1].x, 0.1f)
+        assertEquals(300f, tempSeg[2].x, 0.1f)
+        // Check no NaN and monotonic non-decreasing X
+        assertMonotonicFiniteX(tempSeg)
     }
 
     @Test
     fun abnormalTimestampsFallbackToUniformSpacing() {
-        // Inverted timestamps (t2 < t1)
+        // Inverted timestamps (t2 < t1) are still all valid and form a positive
+        // span after stable sort, so they use time scale — the key invariant is
+        // that nothing is NaN and X stays monotonic.
         val pts = listOf(
             samplePoint(key = "p1", epochMs = 5000L),
             samplePoint(key = "p2", epochMs = 3000L),
@@ -179,6 +185,116 @@ class TrendChartGeometryTest {
             assertFalse(p.x.isNaN())
             assertFalse(p.y.isNaN())
         }
+        assertMonotonicFiniteX(tempSeg)
+    }
+
+    // --- timestamp degradation: all-or-nothing uniform fallback ---------------------
+
+    private fun assertMonotonicFiniteX(segment: List<ChartPoint>) {
+        for (p in segment) {
+            assertFalse(p.x.isNaN(), "x must be finite")
+            assertFalse(p.x.isInfinite(), "x must be finite")
+        }
+        for (i in 1 until segment.size) {
+            assertTrue(
+                segment[i].x >= segment[i - 1].x,
+                "x must be monotonically non-decreasing (index $i)",
+            )
+        }
+    }
+
+    private fun assertUniformByIndex(segment: List<ChartPoint>, width: Float) {
+        val step = width / (segment.size - 1)
+        for (i in segment.indices) {
+            assertEquals(i * step, segment[i].x, 0.1f, "degraded X must be uniform by index at $i")
+        }
+    }
+
+    @Test
+    fun aSingleInvalidTimestampInTheMiddleDegradesTheWholeSeriesToUniform() {
+        val pts = listOf(
+            samplePoint(key = "p1", epochMs = 1000L),
+            samplePoint(key = "p2", epochMs = null), // abnormal
+            samplePoint(key = "p3", epochMs = 5000L),
+        )
+        val layout = TrendChartGeometry.compute(pts, width = 300f, height = 200f, padLeft = 0f, padRight = 0f)
+        assertFalse(layout.usesTimeScale, "one invalid timestamp degrades the whole series")
+        val tempSeg = layout.temperatureSeries.segments.single()
+        assertUniformByIndex(tempSeg, 300f)
+        assertMonotonicFiniteX(tempSeg)
+    }
+
+    @Test
+    fun anInvalidFirstTimestampDegradesTheWholeSeriesToUniform() {
+        val pts = listOf(
+            samplePoint(key = "p1", epochMs = null, receivedAt = "not-a-time", timeText = "not-a-time"),
+            samplePoint(key = "p2", epochMs = 2000L),
+            samplePoint(key = "p3", epochMs = 5000L),
+        )
+        val layout = TrendChartGeometry.compute(pts, width = 300f, height = 200f, padLeft = 0f, padRight = 0f)
+        assertFalse(layout.usesTimeScale)
+        assertEquals("--", layout.startTimeText, "unreliable start endpoint must read --")
+        assertEquals("10:00:00", layout.endTimeText, "reliable end endpoint keeps its clock")
+        val tempSeg = layout.temperatureSeries.segments.single()
+        assertUniformByIndex(tempSeg, 300f)
+        assertMonotonicFiniteX(tempSeg)
+    }
+
+    @Test
+    fun anInvalidLastTimestampDegradesTheWholeSeriesToUniform() {
+        val pts = listOf(
+            samplePoint(key = "p1", epochMs = 1000L),
+            samplePoint(key = "p2", epochMs = 2000L),
+            samplePoint(key = "p3", epochMs = null, receivedAt = "not-a-time", timeText = "not-a-time"),
+        )
+        val layout = TrendChartGeometry.compute(pts, width = 300f, height = 200f, padLeft = 0f, padRight = 0f)
+        assertFalse(layout.usesTimeScale)
+        assertEquals("10:00:00", layout.startTimeText)
+        assertEquals("--", layout.endTimeText, "unreliable end endpoint must read --")
+        val tempSeg = layout.temperatureSeries.segments.single()
+        assertUniformByIndex(tempSeg, 300f)
+        assertMonotonicFiniteX(tempSeg)
+    }
+
+    @Test
+    fun allInvalidTimestampsDegradeTheWholeSeriesToUniform() {
+        val pts = listOf(
+            samplePoint(key = "p1", epochMs = null, receivedAt = "bad-1", timeText = "bad-1"),
+            samplePoint(key = "p2", epochMs = null, receivedAt = "bad-2", timeText = "bad-2"),
+            samplePoint(key = "p3", epochMs = null, receivedAt = "bad-3", timeText = "bad-3"),
+        )
+        val layout = TrendChartGeometry.compute(pts, width = 300f, height = 200f, padLeft = 0f, padRight = 0f)
+        assertFalse(layout.usesTimeScale)
+        assertEquals("--", layout.startTimeText)
+        assertEquals("--", layout.endTimeText, "no reliable endpoint means -- for both ends")
+        val tempSeg = layout.temperatureSeries.segments.single()
+        assertUniformByIndex(tempSeg, 300f)
+        assertMonotonicFiniteX(tempSeg)
+    }
+
+    @Test
+    fun duplicateTimestampsWithPositiveSpanKeepTimeScaleAndMonotonicX() {
+        // Three samples, two of which share a timestamp, but the overall span is
+        // positive. Duplicates collapse to the same X; X is never decreasing.
+        val pts = listOf(
+            samplePoint(key = "p1", epochMs = 1000L),
+            samplePoint(key = "p2", epochMs = 1000L), // duplicate of p1
+            samplePoint(key = "p3", epochMs = 5000L),
+        )
+        val layout = TrendChartGeometry.compute(pts, width = 300f, height = 200f, padLeft = 0f, padRight = 0f)
+        assertTrue(layout.usesTimeScale, "positive span with duplicates still qualifies for time scale")
+        val tempSeg = layout.temperatureSeries.segments.single()
+        assertEquals(0f, tempSeg[0].x, 0.1f)
+        assertEquals(0f, tempSeg[1].x, 0.1f, "duplicate timestamp shares the same X")
+        assertEquals(300f, tempSeg[2].x, 0.1f)
+        assertMonotonicFiniteX(tempSeg)
+    }
+
+    @Test
+    fun singleSampleIsUniformNotTimeScale() {
+        val pt = samplePoint(temp = 25.0, hum = 50.0, gas = 40.0, epochMs = 1000L)
+        val layout = TrendChartGeometry.compute(listOf(pt), width = 300f, height = 200f)
+        assertFalse(layout.usesTimeScale, "a single sample cannot form a time span")
     }
 
     @Test

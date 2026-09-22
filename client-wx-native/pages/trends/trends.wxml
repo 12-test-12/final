@@ -102,7 +102,13 @@
       </view>
       <view class="chart-body">
         <canvas type="2d" id="trendsCanvas" class="trends-canvas"></canvas>
-        <view class="chart-empty" wx:if="{{!hasChartData}}">
+        <!-- 空数据与网络失败是两个不同的状态：不能把加载失败写成「暂无历史数据」，
+             也不能在失败时继续把上一窗口的旧曲线当成当前窗口。 -->
+        <view class="chart-empty" wx:if="{{error}}">
+          <text>{{error}}</text>
+          <text class="chart-retry" bindtap="onRetryTap">点此重试</text>
+        </view>
+        <view class="chart-empty" wx:elif="{{!hasChartData}}">
           <text>暂无历史数据</text>
         </view>
       </view>

@@ -261,6 +261,43 @@ class MonitoringPresentationTest {
     }
 
     @Test
+    fun anUnparseableTimestampYieldsANullEpochRatherThanAForgedZero() {
+        // 0 would be a real instant (the Unix epoch). An unparseable timestamp
+        // has no instant at all, so the model must say so explicitly.
+        val view = MonitoringPresentation.trends(listOf(point(receivedAt = "not-a-timestamp")))
+        assertEquals(null, view.series.single().timestampEpochMs)
+
+        val good = MonitoringPresentation.trends(listOf(point(receivedAt = "2026-09-21T10:00:00Z")))
+        assertEquals(
+            Rfc3339.parseEpochMillis("2026-09-21T10:00:00Z"),
+            good.series.single().timestampEpochMs,
+        )
+    }
+
+    @Test
+    fun anUnreliableAxisEndpointReadsDoubleDashInsteadOfInventingATime() {
+        // Mixed reliability: the end keeps its clock, the start degrades to `--`.
+        val mixed = MonitoringPresentation.trends(
+            listOf(
+                point(receivedAt = "not-a-timestamp"),
+                point(receivedAt = "2026-09-21T11:00:00Z"),
+            ),
+        )
+        assertEquals("--", mixed.curveAxisStart)
+        assertEquals("11:00:00", mixed.curveAxisEnd)
+
+        // No reliable endpoint at all: both ends degrade to `--`.
+        val allBad = MonitoringPresentation.trends(
+            listOf(
+                point(receivedAt = "bad-1"),
+                point(receivedAt = "bad-2"),
+            ),
+        )
+        assertEquals("--", allBad.curveAxisStart)
+        assertEquals("--", allBad.curveAxisEnd)
+    }
+
+    @Test
     fun historyRowRendersGasAsPlaceholderOnlyWhenItIsAbsent() {
         val view = MonitoringPresentation.trends(listOf(point(gasPpm = null), point(gasPpm = 0.0)))
 
@@ -549,7 +586,7 @@ class MonitoringPresentationTest {
 
     // --- fixtures ---------------------------------------------------------------------------
 
-    // --- trends: window selector, peak time, curve placeholder -------------------------
+    // --- trends: window selector, peak time, curve readiness -------------------------
 
     @Test
     fun theWindowSelectorOffersAllThreeBaselineWindowsAndMarksTheActiveOne() {

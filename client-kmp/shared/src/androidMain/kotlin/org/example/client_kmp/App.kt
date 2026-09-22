@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.roundToInt
 import org.example.client_kmp.monitoring.AlertFilter
 import org.example.client_kmp.monitoring.AlertItemView
@@ -83,6 +84,13 @@ private val Info = Color(0xFF7DD3FC)
 // primary button, with the on-colour it pairs with.
 private val ActiveStart = Color(0xFF45F0CB)
 private val ActiveEnd = Color(0xFF16B98B)
+
+/**
+ * Failure copy for a history fetch that did not produce data. Kept constant and
+ * distinct from the empty-success wording so a network error is never read as
+ * "this window has no samples".
+ */
+private const val HISTORY_LOAD_ERROR = "历史数据加载失败，点击时间窗可重试"
 
 /** Backend address reachable from the Android emulator; the host is `10.0.2.2`. */
 private const val EMULATOR_BASE_URL = "http://10.0.2.2:8080"
@@ -291,24 +299,43 @@ private fun Meter(letter: String, label: String, value: String, unit: String, pe
  * The trends page.
  *
  * The page's shape is the frozen baseline's: a window selector, three statistic
- * cards, then the curve block. The block is a placeholder rather than a list of
- * samples — a table of readings is not a trend curve, and showing one where the
- * curve belongs would report an unfinished design goal as met. See
- * [CurvePlaceholder].
+ * cards, then the curve block. The curve block is a chart, not a list of
+ * samples — a table of readings is not a trend curve.
  */
 @Composable
 private fun TrendsScreen(client: MonitoringClient) {
     var view by remember { mutableStateOf<TrendsView?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var window by remember { mutableStateOf(TrendWindow.LAST_HOUR) }
+    // Re-tapping the active window does not change `window`, so the effect key
+    // alone would never refetch. This tick bumps on every tap to force a reload.
+    var retryTick by remember { mutableStateOf(0) }
     // The window is the effect key, so tapping a range cancels the in-flight fetch
     // for the previous one instead of letting two responses race for one state.
-    LaunchedEffect(window) {
-        view = null
+    LaunchedEffect(window, retryTick) {
+        // Clear immediately when the window changed so the previous window's
+        // curve is never left on screen masquerading as the newly selected one.
+        // A same-window refresh (retryTick bump) keeps the old content as a
+        // loading transition only; failure still clears it below.
+        if (view?.windowKey != window.name) {
+            view = null
+        }
         error = null
-        runCatching { client.loadTrends(window) }
-            .onSuccess { view = it }
-            .onFailure { error = it.message }
+        try {
+            view = client.loadTrends(window)
+            error = null
+        } catch (e: CancellationException) {
+            // Propagate structured-concurrency cancellation. Swallowing it here
+            // would let a cancelled fetch write `error` over the new window's state.
+            throw e
+        } catch (e: Exception) {
+            // Failure strategy (identical on Android / MiniApp / wx-native): do
+            // not keep the old curve looking like the new window. Clear it and
+            // show an explicit failure message the user can act on. Empty success
+            // stays a separate state ("所选区间内没有遥测样本").
+            view = null
+            error = HISTORY_LOAD_ERROR
+        }
     }
     Page("历史趋势", "数据统计与曲线") {
         // The selector renders before the data arrives: it is the control the user
@@ -317,10 +344,28 @@ private fun TrendsScreen(client: MonitoringClient) {
         Segmented(
             options = view?.windowOptions ?: MonitoringPresentation.trendWindowOptions(),
             activeKey = window.name,
-            onSelect = { key -> TrendWindow.entries.firstOrNull { it.name == key }?.let { window = it } },
+            onSelect = { key ->
+                TrendWindow.entries.firstOrNull { it.name == key }?.let { selected ->
+                    if (selected == window) {
+                        // Re-tap the active window: retry the same window.
+                        retryTick += 1
+                    } else {
+                        window = selected
+                    }
+                }
+            },
         )
         if (view == null && error == null) Hint("数据加载中…")
-        error?.let { Hint(it, Danger) }
+        error?.let { message ->
+            Hint(message, Danger)
+            // Retry re-runs the same window without changing the selection.
+            Text(
+                "点击上方时间窗可重试",
+                color = TextSecondary,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
         view?.let { data ->
             if (!data.hasData) {
                 Hint("所选区间内没有遥测样本")

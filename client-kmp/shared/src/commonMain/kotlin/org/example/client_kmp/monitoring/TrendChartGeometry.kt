@@ -42,6 +42,11 @@ data class MetricRange(
 
 /**
  * Precomputed layout for drawing the trend chart.
+ *
+ * [usesTimeScale] records which X mapping produced the coordinates: true only
+ * when every sample carried a valid timestamp and those timestamps formed a
+ * reliable positive span. Hosts do not re-derive this; they read it so a legend
+ * or a test can tell time-proportional spacing from the uniform fallback.
  */
 data class TrendChartLayout(
     val width: Float,
@@ -55,6 +60,7 @@ data class TrendChartLayout(
     val endX: Float,
     val startTimeText: String,
     val endTimeText: String,
+    val usesTimeScale: Boolean = false,
 )
 
 object TrendChartGeometry {
@@ -90,6 +96,7 @@ object TrendChartGeometry {
                 endX = (width - padRight).coerceAtLeast(padLeft),
                 startTimeText = "--",
                 endTimeText = "--",
+                usesTimeScale = false,
             )
         }
 
@@ -109,16 +116,21 @@ object TrendChartGeometry {
             }
         }
 
-        // X coordinate mapping
-        val xCoords = computeXCoordinates(points, plotLeft, plotRight, plotWidth)
+        // Presentation order: time-sorted when every timestamp is usable, so the
+        // polyline never has to double back. Mixed-invalid input keeps the caller's
+        // order — there is no reliable key to sort on.
+        val ordered = orderForPlotting(points)
+
+        // X coordinate mapping — all-or-nothing, never a time/uniform mix.
+        val xResult = computeXCoordinates(ordered, plotLeft, plotRight, plotWidth)
 
         // Compute each metric series
         val tempSeries = computeSeries(
             metricName = "温度",
             tone = Tone.DANGER,
             unit = "°C",
-            values = points.map { it.temperatureC },
-            xCoords = xCoords,
+            values = ordered.map { it.temperatureC },
+            xCoords = xResult.xs,
             plotTop = plotTop,
             plotBottom = plotBottom,
             plotHeight = plotHeight,
@@ -128,8 +140,8 @@ object TrendChartGeometry {
             metricName = "湿度",
             tone = Tone.INFO,
             unit = "%RH",
-            values = points.map { it.humidityRh },
-            xCoords = xCoords,
+            values = ordered.map { it.humidityRh },
+            xCoords = xResult.xs,
             plotTop = plotTop,
             plotBottom = plotBottom,
             plotHeight = plotHeight,
@@ -139,15 +151,17 @@ object TrendChartGeometry {
             metricName = "气体",
             tone = Tone.MINT,
             unit = "ppm",
-            values = points.map { it.gasPpm },
-            xCoords = xCoords,
+            values = ordered.map { it.gasPpm },
+            xCoords = xResult.xs,
             plotTop = plotTop,
             plotBottom = plotBottom,
             plotHeight = plotHeight,
         )
 
-        val startText = points.first().timeText
-        val endText = points.last().timeText
+        // Axis labels only show a clock when that endpoint's timestamp is real;
+        // an unreliable endpoint reads `--` rather than a made-up time.
+        val startText = if (ordered.first().timestampEpochMs != null) ordered.first().timeText else "--"
+        val endText = if (ordered.last().timestampEpochMs != null) ordered.last().timeText else "--"
 
         return TrendChartLayout(
             width = width,
@@ -161,34 +175,69 @@ object TrendChartGeometry {
             endX = plotRight,
             startTimeText = startText,
             endTimeText = endText,
+            usesTimeScale = xResult.usesTimeScale,
         )
     }
 
+    /**
+     * Puts samples in ascending event-time order when that order is knowable.
+     *
+     * Only runs when every timestamp is valid: a single unparseable value leaves
+     * the caller's order untouched, which is also the order the uniform fallback
+     * numbers by index. Sort is stable, so equal timestamps keep their arrival
+     * order.
+     */
+    private fun orderForPlotting(points: List<TrendPointView>): List<TrendPointView> {
+        if (points.size < 2) return points
+        if (points.any { it.timestampEpochMs == null }) return points
+        return points.sortedBy { it.timestampEpochMs ?: 0L }
+    }
+
+    private data class XCoordinates(val xs: List<Float>, val usesTimeScale: Boolean)
+
+    /**
+     * Maps samples onto the X axis.
+     *
+     * Real time-proportional spacing is used only when the series can form a
+     * reliable span: more than one sample, every timestamp valid, and a positive
+     * time span. Anything else — a single sample, any invalid timestamp, or a
+     * zero span where every stamp is equal — falls back to uniform index spacing
+     * for the whole series. Mixing the two, or interpolating an invalid stamp as
+     * if it were epoch 0, would bend the polyline backwards or invent a time.
+     */
     private fun computeXCoordinates(
         points: List<TrendPointView>,
         plotLeft: Float,
         plotRight: Float,
         plotWidth: Float,
-    ): List<Float> {
+    ): XCoordinates {
         if (points.size == 1) {
-            return listOf((plotLeft + plotRight) / 2f)
+            return XCoordinates(listOf((plotLeft + plotRight) / 2f), usesTimeScale = false)
         }
 
         val timestamps = points.map { it.timestampEpochMs }
-        val tMin = timestamps.first()
-        val tMax = timestamps.last()
+        val allValid = timestamps.all { it != null }
+        val usable = if (allValid) timestamps.filterNotNull() else emptyList()
+        val positiveSpan = usable.isNotEmpty() && (usable.last() - usable.first()) > 0L
 
-        // If timestamps are invalid or non-increasing, fallback to uniform spacing
-        if (tMax <= tMin) {
-            val step = plotWidth / (points.size - 1)
-            return points.indices.map { i -> (plotLeft + i * step).coerceIn(plotLeft, plotRight) }
+        if (!allValid || !positiveSpan) {
+            return XCoordinates(uniformX(points.size, plotLeft, plotWidth), usesTimeScale = false)
         }
 
+        val tMin = usable.first()
+        val tMax = usable.last()
         val timeSpan = (tMax - tMin).toDouble()
-        return timestamps.map { t ->
-            val fraction = ((t - tMin).toDouble() / timeSpan).coerceIn(0.0, 1.0)
+        val xs = timestamps.map { t ->
+            val fraction = ((t!! - tMin).toDouble() / timeSpan).coerceIn(0.0, 1.0)
             (plotLeft + fraction.toFloat() * plotWidth).coerceIn(plotLeft, plotRight)
         }
+        return XCoordinates(xs, usesTimeScale = true)
+    }
+
+    private fun uniformX(count: Int, plotLeft: Float, plotWidth: Float): List<Float> {
+        if (count <= 1) return listOf(plotLeft)
+        val step = plotWidth / (count - 1)
+        return (0 until count).map { i -> (plotLeft + i * step).coerceIn(plotLeft, plotLeft + plotWidth) }
     }
 
     private fun computeSeries(

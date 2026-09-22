@@ -5,9 +5,9 @@
 
   Layout follows client-wx-native, the frozen visual baseline: page head, section
   heads, glass cards, a segmented selector and a four-item bottom bar. The trends
-  curve is the baseline's placeholder frame — a legend, four grid lines, a masked
-  note and two axis labels — and deliberately not a list of samples. See
-  `curveReady` in the shared model.
+  curve is a chart frame — a legend, four grid lines and two axis labels — around
+  the canvas that draws the shared geometry, and deliberately not a list of
+  samples. See `curveReady` in the shared model.
 -->
 <view class="page">
   <view class="page-head">

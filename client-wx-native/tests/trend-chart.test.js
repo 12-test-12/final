@@ -186,3 +186,120 @@ test('drawTrendChart executes drawing commands without error', () => {
   assert.ok(calls.some((c) => c[0] === 'stroke'))
   assert.ok(calls.some((c) => c[0] === 'fill')) // single dot fill
 })
+
+// --- timestamp degradation: all-or-nothing uniform fallback ---------------------
+
+function assertUniformByIndex(segment, width, padding) {
+  const n = segment.length
+  const plotWidth = width - padding.left - padding.right
+  const step = plotWidth / (n - 1)
+  segment.forEach((p, i) => {
+    assert.equal(
+      Math.round(p.x * 100) / 100,
+      Math.round((padding.left + i * step) * 100) / 100,
+      `degraded X must be uniform by index at ${i}`,
+    )
+  })
+}
+
+function assertMonotonicFiniteX(segment) {
+  segment.forEach((p, i) => {
+    assert.ok(Number.isFinite(p.x), `x[${i}] must be finite`)
+  })
+  for (let i = 1; i < segment.length; i++) {
+    assert.ok(segment[i].x >= segment[i - 1].x, `x must be monotonically non-decreasing at ${i}`)
+  }
+}
+
+test('aSingleInvalidTimestampInTheMiddleDegradesTheWholeSeriesToUniform', () => {
+  const points = [
+    { receivedAt: '2026-09-22T10:00:00Z', temperatureC: 20.0, humidityRh: 50.0, gasPpm: 10.0 },
+    { receivedAt: 'not-a-timestamp', temperatureC: 22.0, humidityRh: 52.0, gasPpm: 12.0 },
+    { receivedAt: '2026-09-22T11:40:00Z', temperatureC: 25.0, humidityRh: 55.0, gasPpm: 15.0 },
+  ]
+  const padding = { left: 0, right: 0, top: 0, bottom: 0 }
+  const geo = buildChartGeometry(points, { width: 300, height: 100, padding })
+
+  assert.equal(geo.usesTimeScale, false, 'one invalid timestamp degrades the whole series')
+  assertUniformByIndex(geo.tempSegments[0], 300, padding)
+  assertMonotonicFiniteX(geo.tempSegments[0])
+})
+
+test('anInvalidFirstOrLastTimestampShowsDashInsteadOfInventingATime', () => {
+  const padding = { left: 0, right: 0, top: 0, bottom: 0 }
+  const firstInvalid = buildChartGeometry(
+    [
+      { receivedAt: 'not-a-timestamp', temperatureC: 20.0, humidityRh: 50.0, gasPpm: 10.0 },
+      { receivedAt: '2026-09-22T11:00:00Z', temperatureC: 25.0, humidityRh: 55.0, gasPpm: 15.0 },
+    ],
+    { width: 200, height: 100, padding },
+  )
+  assert.equal(firstInvalid.usesTimeScale, false)
+  assert.equal(firstInvalid.xStartText, '--', 'unreliable start endpoint must read --')
+  assert.notEqual(firstInvalid.xEndText, '--', 'reliable end endpoint keeps its clock')
+
+  const lastInvalid = buildChartGeometry(
+    [
+      { receivedAt: '2026-09-22T10:00:00Z', temperatureC: 20.0, humidityRh: 50.0, gasPpm: 10.0 },
+      { receivedAt: 'not-a-timestamp', temperatureC: 25.0, humidityRh: 55.0, gasPpm: 15.0 },
+    ],
+    { width: 200, height: 100, padding },
+  )
+  assert.equal(lastInvalid.usesTimeScale, false)
+  assert.notEqual(lastInvalid.xStartText, '--')
+  assert.equal(lastInvalid.xEndText, '--', 'unreliable end endpoint must read --')
+})
+
+test('allInvalidTimestampsDegradeToUniformAndShowDashOnBothEnds', () => {
+  const points = [
+    { receivedAt: 'not-a-timestamp', temperatureC: 20.0, humidityRh: 50.0, gasPpm: 10.0 },
+    { receivedAt: 'also-not-a-time', temperatureC: 22.0, humidityRh: 52.0, gasPpm: 12.0 },
+    { receivedAt: 'still-not-a-time', temperatureC: 25.0, humidityRh: 55.0, gasPpm: 15.0 },
+  ]
+  const padding = { left: 0, right: 0, top: 0, bottom: 0 }
+  const geo = buildChartGeometry(points, { width: 300, height: 100, padding })
+
+  assert.equal(geo.usesTimeScale, false)
+  assert.equal(geo.xStartText, '--')
+  assert.equal(geo.xEndText, '--')
+  assertUniformByIndex(geo.tempSegments[0], 300, padding)
+  assertMonotonicFiniteX(geo.tempSegments[0])
+})
+
+test('duplicateTimestampsWithPositiveSpanKeepTimeScaleAndMonotonicX', () => {
+  const points = [
+    { receivedAt: '2026-09-22T10:00:00Z', temperatureC: 20.0, humidityRh: 50.0, gasPpm: 10.0 },
+    { receivedAt: '2026-09-22T10:00:00Z', temperatureC: 22.0, humidityRh: 52.0, gasPpm: 12.0 },
+    { receivedAt: '2026-09-22T11:00:00Z', temperatureC: 25.0, humidityRh: 55.0, gasPpm: 15.0 },
+  ]
+  const padding = { left: 0, right: 0, top: 0, bottom: 0 }
+  const geo = buildChartGeometry(points, { width: 300, height: 100, padding })
+
+  assert.equal(geo.usesTimeScale, true, 'positive span with duplicates still qualifies for time scale')
+  assert.equal(geo.tempSegments[0][0].x, 0, 'duplicate timestamp shares the same X')
+  assert.equal(geo.tempSegments[0][1].x, 0)
+  assert.equal(geo.tempSegments[0][2].x, 300)
+  assertMonotonicFiniteX(geo.tempSegments[0])
+})
+
+test('singleSampleIsUniformNotTimeScale', () => {
+  const geo = buildChartGeometry(
+    [{ receivedAt: '2026-09-22T10:00:00Z', temperatureC: 25.0, humidityRh: 60.0, gasPpm: 15.0 }],
+    { width: 200, height: 100 },
+  )
+  assert.equal(geo.usesTimeScale, false, 'a single sample cannot form a time span')
+})
+
+test('allEqualTimestampsDegradeToUniformSpacing', () => {
+  const points = [
+    { receivedAt: '2026-09-22T10:00:00Z', temperatureC: 20.0, humidityRh: 50.0, gasPpm: 10.0 },
+    { receivedAt: '2026-09-22T10:00:00Z', temperatureC: 22.0, humidityRh: 52.0, gasPpm: 12.0 },
+    { receivedAt: '2026-09-22T10:00:00Z', temperatureC: 25.0, humidityRh: 55.0, gasPpm: 15.0 },
+  ]
+  const padding = { left: 0, right: 0, top: 0, bottom: 0 }
+  const geo = buildChartGeometry(points, { width: 200, height: 100, padding })
+  assert.equal(geo.usesTimeScale, false, 'zero time span must degrade to uniform spacing')
+  assert.equal(geo.tempSegments[0][0].x, 0)
+  assert.equal(geo.tempSegments[0][1].x, 100)
+  assert.equal(geo.tempSegments[0][2].x, 200)
+})

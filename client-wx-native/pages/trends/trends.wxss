@@ -149,6 +149,13 @@
   font-size: 24rpx;
   color: var(--text-3);
 }
+.chart-retry {
+  display: block;
+  margin-top: 12rpx;
+  font-size: 22rpx;
+  color: var(--accent);
+  text-decoration: underline;
+}
 .chart-xaxis {
   display: flex;
   justify-content: space-between;

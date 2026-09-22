@@ -8,9 +8,9 @@ import kotlin.math.roundToInt
  * Copy shared by both hosts.
  *
  * These strings are the frozen baseline's wording. They live here rather than in
- * each host because a promise about what a control does, or a note that says the
- * curve is unfinished, must not be able to differ between Android and the
- * MiniApp for the same backend state.
+ * each host because a promise about what a control does, or a note about how the
+ * curve is scaled, must not be able to differ between Android and the MiniApp
+ * for the same backend state.
  */
 private const val MUTE_HINT = "静音不影响环境检测与告警上报"
 private const val SAVE_HINT = "下发后需设备确认，确认前仍按旧规则报警"
@@ -169,6 +169,12 @@ data class MetricSummary(
  * ordering tuple when the firmware reports it, and the sample position
  * otherwise. Gas is `--` when the estimate is unavailable, which is different
  * from a measured zero.
+ *
+ * [timestampEpochMs] is null when `receivedAt` is not a parseable RFC 3339
+ * instant. Chart geometry reads that null as "this sample has no reliable event
+ * time" and degrades the whole series to uniform spacing rather than inventing
+ * an epoch-0 position. `timeText` still shows the raw string so an unreadable
+ * stamp is visible in the list instead of silently rewritten.
  */
 @Serializable
 data class TrendPointView(
@@ -179,7 +185,7 @@ data class TrendPointView(
     val humidityText: String,
     val gasText: String,
     val localAlarm: Boolean,
-    val timestampEpochMs: Long = 0L,
+    val timestampEpochMs: Long? = null,
     val temperatureC: Double = 0.0,
     val humidityRh: Double = 0.0,
     val gasPpm: Double? = null,
@@ -188,11 +194,11 @@ data class TrendPointView(
 /**
  * Historical statistics plus the ordered rows they were computed from.
  *
- * `series` keeps ascending event-time order and is retained for the chart that
- * will replace the curve placeholder. Hosts must not render it as a list in its
- * place: a table of samples is not a trend curve, and presenting one as the
- * "curve" would report the design goal as met when it is not. [curveReady] is
- * the single flag that says which of the two the user is looking at.
+ * `series` is what the chart draws: each row carries the raw metric values and
+ * a nullable event time so [TrendChartGeometry] can map X coordinates. Hosts
+ * must not render it as a list in the curve's place — a table of samples is not
+ * a trend curve. [curveReady] is the single flag that says whether there is
+ * currently drawable history.
  */
 @Serializable
 data class TrendsView(
@@ -212,10 +218,11 @@ data class TrendsView(
     val curveAxisStart: String,
     val curveAxisEnd: String,
     /**
-     * False while the curve is a placeholder. Nothing in this client draws a
-     * curve yet — no canvas, no path geometry — so the hosts render the
-     * placeholder frame and this flag records the outstanding work instead of
-     * letting a sample list stand in for it.
+     * True when there is currently drawable history — that is, `series` holds at
+     * least one sample with the values a chart needs. It is not a statement about
+     * whether a chart library is wired up: both hosts render the shared geometry
+     * on a canvas. Empty success (no samples in range) leaves this false so the
+     * host can show "no data" rather than a blank frame.
      */
     val curveReady: Boolean,
     val curveLegend: List<CurveLegend>,
@@ -383,8 +390,18 @@ object MonitoringPresentation {
         val humRange = if (points.isNotEmpty()) "${humSummary.minimum}~${humSummary.maximum}%" else ""
         val gasRange = if (gasReadings.isNotEmpty()) "${gasSummary.minimum}~${gasSummary.maximum}ppm" else ""
 
-        val axisStart = if (points.isNotEmpty()) clockText(points.first().receivedAt) else "--"
-        val axisEnd = if (points.isNotEmpty()) clockText(points.last().receivedAt) else "--"
+        // Axis endpoints show a clock only when that sample's stamp is real;
+        // an unreliable endpoint reads `--` rather than a made-up time.
+        val axisStart = if (points.isNotEmpty() && Rfc3339.parseEpochMillis(points.first().receivedAt) != null) {
+            clockText(points.first().receivedAt)
+        } else {
+            "--"
+        }
+        val axisEnd = if (points.isNotEmpty() && Rfc3339.parseEpochMillis(points.last().receivedAt) != null) {
+            clockText(points.last().receivedAt)
+        } else {
+            "--"
+        }
         val statusText = if (points.isNotEmpty()) CURVE_STATUS_TEXT else "暂无数据"
 
         return TrendsView(
@@ -423,7 +440,7 @@ object MonitoringPresentation {
         humidityText = reading(point.humidityRh),
         gasText = point.gasPpm?.let(::reading) ?: "--",
         localAlarm = point.localAlarm,
-        timestampEpochMs = Rfc3339.parseEpochMillis(point.receivedAt) ?: 0L,
+        timestampEpochMs = Rfc3339.parseEpochMillis(point.receivedAt),
         temperatureC = point.temperatureC,
         humidityRh = point.humidityRh,
         gasPpm = point.gasPpm,

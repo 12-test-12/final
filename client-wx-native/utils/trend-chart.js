@@ -6,8 +6,12 @@
  *    各自独立计算极值并保留 10% 上下内边距（padding）。
  * 2. 气体缺失分段：当 gasPpm 为 null 或 undefined 时打断连续线段，禁止将缺失值转为 0；
  *    有效测量值 0.0 正常保留并绘制。
- * 3. 时间比例 X 轴：根据样本时间戳相对首尾跨度线性分布；单样本或时间戳异常时降级为均匀分布。
+ * 3. 时间比例 X 轴（all-or-nothing）：仅当「样本数 > 1」且「每个时间戳都有效」
+ *    且「首尾跨度为正」时按时间比例分布；单样本、任一时间戳异常或全部时间戳相同
+ *    时，整条序列统一降级为按索引均匀分布。绝不混用两种映射。
  * 4. 纯逻辑与绘图解耦：buildChartGeometry 为无 DOM/Canvas 依赖的纯函数，便于自动化测试。
+ * 5. 竞态门闩：createRenderGate 提供可注入的版本校验，供页面在异步 Canvas 回调里
+ *    判断「本次绘制是否仍是最新意图」。
  */
 
 const { formatTime } = require('./helpers.js')
@@ -63,6 +67,7 @@ function computeRange(values, fallbackMin, fallbackMax) {
 
 /**
  * 解析时间戳为毫秒数。
+ * 无法解析时返回 null，绝不伪造 epoch 0。
  */
 function parseTimestamp(ts) {
   if (ts == null) return null
@@ -95,6 +100,7 @@ function buildChartGeometry(rawPoints, options = {}) {
   if (!rawPoints || !rawPoints.length) {
     return {
       hasData: false,
+      usesTimeScale: false,
       width,
       height,
       padding,
@@ -111,44 +117,50 @@ function buildChartGeometry(rawPoints, options = {}) {
     }
   }
 
-  // 确保按时间升序排列
-  const points = rawPoints
-    .map((p) => {
-      const iso = p.receivedAt || p.timestamp
-      return {
-        raw: p,
-        iso,
-        timestampMs: parseTimestamp(iso),
-        temp: p.temperatureC != null && !isNaN(p.temperatureC) && isFinite(p.temperatureC) ? Number(p.temperatureC) : null,
-        hum: p.humidityRh != null && !isNaN(p.humidityRh) && isFinite(p.humidityRh) ? Number(p.humidityRh) : null,
-        gas: p.gasPpm != null && !isNaN(p.gasPpm) && isFinite(p.gasPpm) ? Number(p.gasPpm) : null,
-      }
-    })
-    .sort((a, b) => {
-      if (a.timestampMs != null && b.timestampMs != null) {
-        return a.timestampMs - b.timestampMs
-      }
-      return 0
-    })
-
-  const validTimestamps = points.map((p) => p.timestampMs).filter((t) => t != null)
-  const minTs = validTimestamps.length ? Math.min.apply(null, validTimestamps) : null
-  const maxTs = validTimestamps.length ? Math.max.apply(null, validTimestamps) : null
-  const hasTimeSpan = minTs != null && maxTs != null && maxTs > minTs
-
-  // 计算每个样本的 X 坐标
-  const n = points.length
-  const xs = points.map((p, idx) => {
-    if (n === 1) {
-      return padding.left + plotWidth / 2
+  // 解析每个样本的时间戳；保留 iso 字段供轴标签使用。
+  const points = rawPoints.map((p) => {
+    const iso = p.receivedAt || p.timestamp
+    return {
+      raw: p,
+      iso,
+      timestampMs: parseTimestamp(iso),
+      temp: p.temperatureC != null && !isNaN(p.temperatureC) && isFinite(p.temperatureC) ? Number(p.temperatureC) : null,
+      hum: p.humidityRh != null && !isNaN(p.humidityRh) && isFinite(p.humidityRh) ? Number(p.humidityRh) : null,
+      gas: p.gasPpm != null && !isNaN(p.gasPpm) && isFinite(p.gasPpm) ? Number(p.gasPpm) : null,
     }
-    if (hasTimeSpan && p.timestampMs != null) {
-      const ratio = (p.timestampMs - minTs) / (maxTs - minTs)
-      return padding.left + ratio * plotWidth
-    }
-    // 降级为均匀分布
-    return padding.left + (idx / (n - 1)) * plotWidth
   })
+
+  // 排序规则：仅当每个时间戳都有效时才按事件时间升序（稳定排序），
+  // 否则保留调用方给定的呈现顺序 —— 混杂无效时间戳时没有可靠排序键。
+  const allValidTs = points.every((p) => p.timestampMs != null)
+  if (points.length > 1 && allValidTs) {
+    points.sort((a, b) => a.timestampMs - b.timestampMs)
+  }
+
+  // X 映射（all-or-nothing）：全部有效且跨度为正 → 时间比例；否则整条序列均匀分布。
+  const n = points.length
+  let usesTimeScale = false
+  let xs
+  if (n === 1) {
+    xs = [padding.left + plotWidth / 2]
+  } else if (allValidTs) {
+    const tMin = points[0].timestampMs
+    const tMax = points[n - 1].timestampMs
+    const span = tMax - tMin
+    if (span > 0) {
+      usesTimeScale = true
+      xs = points.map((p) => {
+        const ratio = Math.max(0, Math.min(1, (p.timestampMs - tMin) / span))
+        return padding.left + ratio * plotWidth
+      })
+    } else {
+      // 全部时间戳相同：跨度非正，整条序列降级为均匀分布。
+      xs = points.map((_, idx) => padding.left + (idx / (n - 1)) * plotWidth)
+    }
+  } else {
+    // 任一时间戳异常：整条序列降级为均匀分布，禁止混用时间比例。
+    xs = points.map((_, idx) => padding.left + (idx / (n - 1)) * plotWidth)
+  }
 
   // 计算各指标数值范围
   const tempRange = computeRange(points.map((p) => p.temp), 15, 35)
@@ -221,11 +233,15 @@ function buildChartGeometry(rawPoints, options = {}) {
   const humRangeText = humRange.rawMin != null ? `${humRange.rawMin.toFixed(1)}~${humRange.rawMax.toFixed(1)}%` : '--'
   const gasRangeText = gasRange.rawMin != null ? `${gasRange.rawMin.toFixed(1)}~${gasRange.rawMax.toFixed(1)}ppm` : '--'
 
-  const xStartText = formatTime(points[0].iso)
-  const xEndText = formatTime(points[points.length - 1].iso)
+  // 轴标签只在该端点时间戳可靠时显示时钟；不可靠端点显示 `--`，绝不编造时间。
+  const firstTsValid = points[0].timestampMs != null
+  const lastTsValid = points[n - 1].timestampMs != null
+  const xStartText = firstTsValid ? formatTime(points[0].iso) : '--'
+  const xEndText = lastTsValid ? formatTime(points[n - 1].iso) : '--'
 
   return {
     hasData: true,
+    usesTimeScale,
     width,
     height,
     padding,
@@ -306,10 +322,53 @@ function drawTrendChart(ctx, geometry) {
   }
 }
 
+/**
+ * 创建绘制竞态门闩（纯逻辑，可注入、可单测）。
+ *
+ * 网络请求和 `createSelectorQuery().exec()` 是两个异步边界：请求 A 的 selector
+ * 回调可能在请求 B 之后完成。页面在发起绘制前递增版本号，并在 selector 回调里
+ * 调用 `isStillWanted` 重新校验：页面已卸载、版本已过期、或时间窗已切换时，
+ * 本次回调必须放弃绘制与 setData。
+ *
+ * @returns {{nextVersion: () => number, isStillWanted: (version: number, windowKey: string) => boolean, dispose: () => void}}
+ */
+function createRenderGate() {
+  let version = 0
+  let windowKey = null
+  let disposed = false
+
+  return {
+    /** 开始一次新的绘制意图；返回本次的版本号。 */
+    nextVersion(nextWindowKey) {
+      version += 1
+      windowKey = nextWindowKey == null ? null : String(nextWindowKey)
+      return version
+    },
+    /**
+     * 判断 version 是否仍是最新且页面仍存活、时间窗未变。
+     * @param {number} candidateVersion 发起绘制时拿到的版本号
+     * @param {string} candidateWindowKey 发起绘制时的时间窗
+     */
+    isStillWanted(candidateVersion, candidateWindowKey) {
+      if (disposed) return false
+      if (candidateVersion !== version) return false
+      const nextKey = candidateWindowKey == null ? null : String(candidateWindowKey)
+      return nextKey === windowKey
+    },
+    /** 页面卸载时调用；使所有在途回调失效。 */
+    dispose() {
+      disposed = true
+      version += 1
+      windowKey = null
+    },
+  }
+}
+
 module.exports = {
   COLORS,
   computeRange,
   parseTimestamp,
   buildChartGeometry,
   drawTrendChart,
+  createRenderGate,
 }
