@@ -2,7 +2,7 @@
 
 状态：`v1.0.0-frozen`（SHIXUN-3 契约评审通过后冻结；后续修改必须走 §9 变更流程）。
 
-本文是设备与 Backend 之间 MQTT 报文的事实源。当前固件已使用 ESP8266 TCP 透传 MQTT 3.1.1，并已实机验证 CONNECT、SUBSCRIBE 与 `device/telemetry` QoS 1 上报。`device/control` 已订阅，但命令执行与 ACK 尚未接入主循环，不得按已完成对待。
+本文是设备与 Backend 之间 MQTT 报文的事实源。当前固件已使用 ESP8266 TCP 透传 MQTT 3.1.1。已实机验证 CONNECT、SUBSCRIBE 与 `device/telemetry` QoS 1 上报。`device/control` 的命令执行与 `device/command-ack` 回执已实现并纳入主机测试；**实机闭环（PUBACK、command-ack、`applied`）在本轮修复前从未验证通过**，因此在此之前不得按已验收能力对待，验证状态以 §7.2 为准。
 
 ## 1. Transport
 
@@ -176,6 +176,34 @@ MQTT 连接参数：协议 3.1.1（或 5.0），`clientId` 必须等于 `deviceI
 - 若未同步，设备使用 Backend 在命令中给出的窗口长度（`expiresAt - issuedAt`）作为允许窗口，从 `receivedUptimeMs` 起算；
 - 两种情况下，设备重启后清空的未执行命令一律视为 `expired`，**绝不**在重连后补执行过期命令。
 
+## 4.5 设备端命令执行实现（固件约束，非契约放宽）
+
+固件在 `hardware/core/control_link.c` 中实现本节的接收路径，以下为与实现强绑定的事实：
+
+**校验顺序**：§4.1 的顺序为 schema → deviceId → requestId 去重 → expiresAt → type → 范围。固件按此顺序执行，但有两个可观测差异：
+
+- 解析层（`hardware/core/command_json.c`）在返回前已完成 type 与数值范围校验，因此一条**同时**越界且已过期的命令回执为 `rejected`（`out_of_range`）而不是 `expired`。两者都不产生副作用，语义上都是「未执行」。
+- 去重先于版本比较：重投递的阈值命令回执 `duplicate` 并携带当前生效的 `thresholdVersion`，而不是 `stale_version`。这是刻意的——Backend 已经记录了首次结果，回 `stale_version` 会被读成一次新的失败。
+
+**ACK 的 `sequence`**：与遥测共用同一个「本次启动单调递增」计数器，因此遥测与 ACK 的 `sequence` 落在同一号段内，可用于排序两条流。计数器**仅在 ACK 生成成功时自增**，无 ACK 的帧不占号。
+
+**QoS 0 的 `device/control`**：冻结契约规定该主题为 QoS 1。若收到 QoS 0，固件仍会校验并执行，并照常回 command ACK，只是不产生 PUBACK——QoS 0 没有可确认的投递。该分支是防御性的，不是受支持模式。
+
+**离线期间收到的 PUBLISH**：未建立会话（未收到 SUBACK 或 TCP 断开）时，PUBLISH 只回 PUBACK，**不执行**。此类帧在设备上单独计数（`offline_frames`）。当同一个 TCP 接收缓冲中依次包含有效 SUBACK 与控制 PUBLISH 时，固件在确认 SUBACK 有效（状态处于等待 SUBACK、未携带 0x80 失败码、packetId 吻合）后立即切入在线会话，紧随其后的 PUBLISH 立即按在线执行并回复 command ACK，不会被误判为离线丢弃。
+
+### 4.5.1 接收缓冲的已知限制（不静默丢包）
+
+ESP8266 驱动（`hardware/Esp8266/esp8266.c`）只有一个 TCP 接收缓冲、没有队列。因此：
+
+| 情形 | 行为 |
+| --- | --- |
+| 一个 `+IPD` 内含多个 MQTT 帧 | **支持**。`MqttForEachPacket` 逐帧扫描整个缓冲，codec 拒绝的帧跳过而不终止扫描。 |
+| `+IPD` 载荷长于接收缓冲（640 B） | 只保留前缀，计为 `truncated_frames`；该帧无法解码，靠 QoS 1 重投递。 |
+| 前一帧尚未取走时又到一个 `+IPD` | 丢弃**新**帧并计为 `discarded_frames`（保留较早帧：它可能是会话在等的 CONNACK/SUBACK）。不覆盖、不静默。 |
+| 一个 MQTT 帧被拆到两个 `+IPD` 中 | **不支持**。驱动不保留半帧状态，第二个分片到达时前一帧已按新帧处理；结果是一个尾部残帧，计为 partial。 |
+
+计数通过 `ESP8266_GetReceiveStats` 读取，非零时显示在 OLED 网络页（`RX Dxxx TRxxx`）。**丢失只靠 `device/control` 的 QoS 1 重投递恢复**，这也是该主题必须是 QoS 1 的实现层理由。
+
 ## 5. 去重、排序与在线判定
 
 ### 5.1 遥测唯一性与顺序
@@ -244,7 +272,7 @@ APP001|<temperature>|<humidity>|<gasPpm>
 迁移规则（冻结）：
 
 1. 主循环已停止调用旧 `APP001` 文本帧任务，改为 CONNECT → SUBSCRIBE → PUBLISH/PING 状态机。
-2. 2026-09-21 实机验证已覆盖冷启动、手机热点、EMQX 连接、QoS 1 遥测上报、Go 消费与 PostgreSQL 落库。Broker 重启、断网恢复和控制命令仍待验证。
+2. 2026-09-21 实机验证已覆盖冷启动、手机热点、EMQX 连接、QoS 1 遥测上报、Go 消费与 PostgreSQL 落库。Broker 重启、断网恢复与控制命令在 2026-09-22 修复前均未验证通过。
 3. 禁止在同一次未经验证的修改中同时迁移 HAL、重写传感器驱动并切换 MQTT。
 4. 迁移期间字段映射：文本帧的 `<temperature>` → `temperatureC`（整数部分）、`<humidity>` → `humidityRh`、`<gasPpm>` → `gasPpm`；文本帧缺少的 `bootId`、`sequence`、`gasAdcRaw`、`gasAdcFiltered`、`thresholdVersion` 等字段必须在 MQTT 路径中补齐，不能靠 Backend 猜测。
 
