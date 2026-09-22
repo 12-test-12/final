@@ -121,6 +121,7 @@ data class AlertItemView(
     val windowSecondsText: String,
 )
 
+/** Alert-list payload shared by Android and MiniApp hosts. */
 @Serializable
 data class AlertsView(val count: Int, val items: List<AlertItemView>)
 
@@ -241,8 +242,10 @@ object MonitoringPresentation {
         localAlarm = point.localAlarm,
     )
 
+    /** Maps persisted alert events without recomputing their trigger evidence. */
     fun alerts(events: List<AlertEvent>): AlertsView = AlertsView(events.size, events.map(::alert))
 
+    /** Maps one persisted event to host-ready labels and formatted evidence. */
     fun alert(event: AlertEvent): AlertItemView {
         val tone = when (event.state) {
             AlertState.fire_warning -> Tone.DANGER
@@ -327,6 +330,7 @@ object MonitoringPresentation {
         errorText = "--",
     )
 
+    /** Maps a backend command lifecycle state to host-ready semantics. */
     fun commandStatus(value: CommandStatus): CommandStatusView {
         val settled = when (value.state) {
             CommandState.accepted, CommandState.published -> false

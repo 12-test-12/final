@@ -54,12 +54,14 @@ class MonitoringClient(
         return MonitoringPresentation.trends(page.items)
     }
 
+    /** Loads the newest alert events up to the contract limit. */
     suspend fun loadAlerts(limit: Int = DEFAULT_ALERT_LIMIT): AlertsView {
         val safeLimit = limit.coerceIn(1, MAX_SAMPLE_LIMIT)
         val page: AlertPage = get("/api/v1/devices/$deviceId/alerts?limit=$safeLimit")
         return MonitoringPresentation.alerts(page.items)
     }
 
+    /** Loads desired and device-confirmed threshold state. */
     suspend fun loadSettings(): SettingsView {
         val thresholds: Thresholds = get("/api/v1/devices/$deviceId/thresholds")
         return MonitoringPresentation.settings(thresholds)
@@ -111,10 +113,11 @@ class MonitoringClient(
      * Polls until the device acknowledgement settles a command.
      *
      * The enqueue response is always `pending`, so this is how a host reaches a
-     * terminal outcome. A read failure is retried rather than propagated: the
-     * device may be offline and the command may still land after a timeout, so
-     * an exhausted poll returns null (still awaiting) instead of claiming a
-     * failure that was never observed.
+     * terminal outcome. Transport failures, rate limits and server failures are
+     * retried because the command may still land after a temporary outage.
+     * Client/contract failures are propagated immediately: treating a 401, 404
+     * or malformed successful response as "still awaiting" would hide a broken
+     * configuration from both hosts.
      *
      * @return the settled view, or null when no terminal state was observed in
      *   [attempts] polls.
@@ -126,16 +129,37 @@ class MonitoringClient(
     ): CommandStatusView? {
         repeat(attempts) {
             delay(intervalMillis)
-            val view = runCatching { loadCommandStatus(requestId) }.getOrNull()
+            val view = try {
+                loadCommandStatus(requestId)
+            } catch (failure: MonitoringException) {
+                if (!failure.isRetryableStatus()) throw failure
+                null
+            } catch (_: Exception) {
+                // Platform transports expose connectivity failures as ordinary
+                // exceptions. Retry them within the bounded polling budget.
+                null
+            }
             if (view != null && view.settled) return view
         }
         return null
     }
 
+    private fun MonitoringException.isRetryableStatus(): Boolean =
+        statusCode == 429 || statusCode >= 500
+
+    /** Encodes a dashboard view as plain JSON for non-Kotlin hosts. */
     fun encodeDashboard(value: DashboardView): String = json.encodeToString(value)
+
+    /** Encodes a trends view as plain JSON for non-Kotlin hosts. */
     fun encodeTrends(value: TrendsView): String = json.encodeToString(value)
+
+    /** Encodes an alerts view as plain JSON for non-Kotlin hosts. */
     fun encodeAlerts(value: AlertsView): String = json.encodeToString(value)
+
+    /** Encodes a settings view as plain JSON for non-Kotlin hosts. */
     fun encodeSettings(value: SettingsView): String = json.encodeToString(value)
+
+    /** Encodes a command lifecycle view as plain JSON for non-Kotlin hosts. */
     fun encodeCommandStatus(value: CommandStatusView): String = json.encodeToString(value)
 
     private suspend inline fun <reified T> get(path: String): T = decode(platform.request(HttpRequest(baseUrl + path)))

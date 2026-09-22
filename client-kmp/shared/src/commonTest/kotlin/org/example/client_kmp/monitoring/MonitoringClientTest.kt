@@ -383,6 +383,21 @@ class MonitoringClientTest {
     }
 
     @Test
+    fun aPermanentStatusReadFailureIsNotMisreportedAsStillPending() = runTest {
+        val platform = FakePlatform {
+            HttpResponse(404, """{"error":{"code":"command_not_found","message":"unknown command"}}""")
+        }
+
+        val error = assertFailsWith<MonitoringException> {
+            MonitoringClient(platform, "http://test").awaitCommandOutcome("missing")
+        }
+
+        assertEquals("command_not_found", error.code)
+        assertEquals(404, error.statusCode)
+        assertEquals(1, platform.requests.size)
+    }
+
+    @Test
     fun aRejectedCommandSettlesAsAFailure() = runTest {
         val platform = FakePlatform {
             HttpResponse(

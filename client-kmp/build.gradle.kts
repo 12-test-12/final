@@ -110,6 +110,15 @@ val checkMiniAppHostSelfContained by tasks.registering {
             "the WeChat project is not self-contained:\n  " + escapees.joinToString("\n  ")
         }
 
+        // A 202 response and an exhausted acknowledgement poll are not device
+        // success. Keep both control buttons tied to the shared `confirmed`
+        // flag so pending/duplicate/failed outcomes never render a green tick.
+        val monitorScript = miniAppDir.file("pages/monitor/monitor.js").asFile.readText()
+        val confirmedToast = "icon: outcome && outcome.confirmed ? 'success' : 'none'"
+        check(Regex(Regex.escape(confirmedToast)).findAll(monitorScript).count() == 2) {
+            "both MiniApp control flows must show success only for a confirmed device acknowledgement"
+        }
+
         logger.lifecycle("miniApp/ is self-contained: ${files.size} bundle files, no external requires")
     }
 }

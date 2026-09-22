@@ -145,7 +145,9 @@ Page({
       await this.loadDashboard(false)
       wx.showToast({
         title: outcome ? outcome.stateText : '等待设备确认',
-        icon: outcome && outcome.failed ? 'none' : 'success',
+        // Only an explicit device `applied` acknowledgement is success.
+        // Pending, duplicate and failed outcomes must not get a green tick.
+        icon: outcome && outcome.confirmed ? 'success' : 'none',
       })
     } catch (e) {
       wx.showToast({ title: (e && e.message) || '下发失败', icon: 'none' })
@@ -183,7 +185,7 @@ Page({
       const outcome = await this.awaitCommandOutcome(accepted.requestId)
       wx.showToast({
         title: outcome ? outcome.stateText : '等待设备确认',
-        icon: outcome && outcome.failed ? 'none' : 'success',
+        icon: outcome && outcome.confirmed ? 'success' : 'none',
       })
       await this.loadTab()
     } catch (e) {

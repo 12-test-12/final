@@ -74,6 +74,7 @@ data class TelemetryPoint(
     val timestamp: String? = null,
 )
 
+/** Cursor page returned by the telemetry history endpoint. */
 @Serializable
 data class TelemetryPage(val items: List<TelemetryPoint> = emptyList(), val nextCursor: String? = null)
 
@@ -95,6 +96,7 @@ data class AlertEvidence(
     val windowSeconds: Int? = null,
 )
 
+/** One persisted composite-alert event and its trigger-time evidence. */
 @Serializable
 data class AlertEvent(
     val id: String,
@@ -105,6 +107,7 @@ data class AlertEvent(
     val endedAt: String? = null,
 )
 
+/** Cursor page returned by the alert history endpoint. */
 @Serializable
 data class AlertPage(val items: List<AlertEvent> = emptyList(), val nextCursor: String? = null)
 

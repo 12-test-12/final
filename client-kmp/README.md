@@ -177,9 +177,10 @@ client-kmp/miniApp
 
 生产环境必须使用 HTTPS 域名并在小程序后台配置合法域名；`wx.request` 在非开发者模式下拒绝明文 HTTP。
 
-> **包体积**：`miniApp/kotlin/` 约 2.3 MB。微信主包上限 2 MB，请依赖开发者工具的
-> **上传时压缩/混淆**（`project.config.json` 已开启 `minified`），或后续将该目录拆到分包。
-> 这是当前已知风险，不是已解决问题。
+> **包体积阻塞**：`miniApp/kotlin/` 当前约 2.3 MB，尚未在微信开发者工具中完成
+> 真实预览/上传验证。`project.config.json` 虽已开启 `minified`，但在工具确认
+> 处理后包体满足限制前，不得将“可上传”视为已验收。若仍超限，需要继续
+> 缩减 JS 运行时或按微信规则拆分包。
 
 ---
 
@@ -212,9 +213,9 @@ cd client-kmp
 
 | 项目 | 结果 |
 | --- | --- |
-| `:shared:testAndroidHostTest` | 84 tests，0 failures |
-| `:shared:miniappTest`（Node/JS） | 77 tests，0 failures |
-| `:shared:iosSimulatorArm64Test` | 72 tests，0 failures（仅共享逻辑） |
+| `:shared:testAndroidHostTest` | 85 tests，0 failures |
+| `:shared:miniappTest`（Node/JS） | 83 tests，0 failures |
+| `:shared:iosSimulatorArm64Test` | 77 tests，0 failures（仅共享逻辑） |
 | 共享业务逻辑行覆盖率 | 100%（405 行），方法/类 100% |
 | `:shared:checkMiniAppHostBoundary` | PASS |
 | `:androidApp:assembleDebug` | PASS，产出 debug APK |
