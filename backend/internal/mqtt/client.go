@@ -163,11 +163,10 @@ type Client struct {
 
 	writeMu sync.Mutex
 
-	stateMu         sync.RWMutex
-	conn            net.Conn
-	connected       bool
-	connEpoch       uint64
-	establishedOnce bool
+	stateMu   sync.RWMutex
+	conn      net.Conn
+	connected bool
+	connEpoch uint64
 
 	// pendingMu guards the in-flight QoS 1 acknowledgement table. Entries are
 	// closed exactly once, by whichever of the two outcomes happens first: the
@@ -238,11 +237,12 @@ func (c *Client) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		epochBefore := c.epoch()
 		err := c.session(ctx)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if c.established() {
+		if c.epoch() != epochBefore {
 			// The session got as far as reporting itself connected before it
 			// ended. That is a healthy link going quiet on us, not a persistent
 			// failure, so the delay must not keep growing across retries.
@@ -619,17 +619,7 @@ func (c *Client) setState(conn net.Conn, connected bool) {
 	c.connected = connected
 	if connected {
 		c.connEpoch++
-		c.establishedOnce = true
 	}
-}
-
-// established reports whether this client has ever reached the connected state,
-// which is what tells Run whether the last session was a healthy link that
-// dropped or a connect attempt that never succeeded.
-func (c *Client) established() bool {
-	c.stateMu.RLock()
-	defer c.stateMu.RUnlock()
-	return c.establishedOnce
 }
 
 // epoch returns the connection epoch currently in flight. It is read after the

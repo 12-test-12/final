@@ -250,6 +250,41 @@ func TestBackoffIsResetAfterAHealthySession(t *testing.T) {
 	}
 }
 
+// TestBackoffGrowsAgainAfterTheReset proves the reset belongs to one successful
+// session rather than to the lifetime of the Client. Once that session ends,
+// consecutive rejected reconnects must grow the delay again; otherwise a broker
+// that stays unavailable is hammered at ReconnectMin forever.
+func TestBackoffGrowsAgainAfterTheReset(t *testing.T) {
+	broker, err := mqtttest.Start()
+	if err != nil {
+		t.Fatalf("start broker: %v", err)
+	}
+	t.Cleanup(func() { _ = broker.Close() })
+
+	client := startClient(t, broker, func(cfg *mqtt.Config) {
+		cfg.ReconnectMin = 30 * time.Millisecond
+		cfg.ReconnectMax = 120 * time.Millisecond
+	}, nil)
+	waitFor(t, "the initial healthy session", client.Connected)
+
+	baseline := len(broker.ConnectTimes())
+	broker.RejectConnections(true)
+	broker.DropConnections()
+	waitFor(t, "four rejected reconnect attempts", func() bool {
+		return len(broker.ConnectTimes()) >= baseline+4
+	})
+
+	attempts := broker.ConnectTimes()[baseline : baseline+4]
+	firstFailureGap := attempts[2].Sub(attempts[1])
+	secondFailureGap := attempts[3].Sub(attempts[2])
+	if firstFailureGap < 45*time.Millisecond {
+		t.Fatalf("first consecutive-failure delay = %s, want growth beyond ReconnectMin", firstFailureGap)
+	}
+	if secondFailureGap < 90*time.Millisecond {
+		t.Fatalf("second consecutive-failure delay = %s, want growth toward ReconnectMax", secondFailureGap)
+	}
+}
+
 // TestBrokerRestartResubscribes is the recovery contract for the control path.
 // A broker that comes back must have the client's subscriptions re-established
 // before telemetry flows again, because Connected means "ready" and not merely

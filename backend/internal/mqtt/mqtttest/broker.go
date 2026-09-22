@@ -15,6 +15,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/BobcGn/final/backend/internal/mqtt"
 )
@@ -63,11 +64,16 @@ type Broker struct {
 	// recover from. Without it the broker would keep both, and a test could not
 	// observe the client's behaviour across a duplicate identifier.
 	TakeOver bool
+	// rejectConnections makes the broker answer CONNECT with a rejection. It is
+	// changed through RejectConnections so tests can safely turn a once-healthy
+	// broker into a sequence of failed connection attempts.
+	rejectConnections bool
 
-	mu       sync.Mutex
-	conns    map[net.Conn]struct{}
-	sessions map[*session]struct{}
-	observed []Message
+	mu           sync.Mutex
+	conns        map[net.Conn]struct{}
+	sessions     map[*session]struct{}
+	observed     []Message
+	connectTimes []time.Time
 	// pings counts every PINGREQ the broker received. A keep-alive loop that
 	// never fires is indistinguishable from one that is never needed without a
 	// count, and the distinction is the whole point of the idle-driven cadence.
@@ -139,6 +145,22 @@ func (b *Broker) Pings() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.pings
+}
+
+// RejectConnections controls whether CONNECT is refused. Existing sessions are
+// not affected until they reconnect.
+func (b *Broker) RejectConnections(reject bool) {
+	b.mu.Lock()
+	b.rejectConnections = reject
+	b.mu.Unlock()
+}
+
+// ConnectTimes returns a copy of the times at which CONNECT packets arrived.
+func (b *Broker) ConnectTimes() []time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return append([]time.Time(nil), b.connectTimes...)
 }
 
 // WithholdPubAcks makes the broker stop answering QoS 1 publishes. It is how a
@@ -290,6 +312,13 @@ func (b *Broker) negotiate(current *session) error {
 		return fmt.Errorf("mqtttest: expected CONNECT, got %s", packet.Type)
 	}
 	current.clientID = packet.ClientID
+	b.mu.Lock()
+	b.connectTimes = append(b.connectTimes, time.Now())
+	reject := b.rejectConnections
+	b.mu.Unlock()
+	if reject {
+		return current.write(&mqtt.Packet{Type: mqtt.PacketCONNACK, ReturnCode: mqtt.ConnackServerUnavailable})
+	}
 
 	if b.TakeOver {
 		b.discardExisting(current.clientID)
