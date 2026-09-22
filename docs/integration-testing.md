@@ -143,14 +143,12 @@ curl -X POST 'http://localhost:8080/api/v1/devices/MCU001/commands/mute' \
 
 ## 6. 需要真实硬件的部分
 
-以下项目**未执行**，必须在开发板上复现，且不得按已验证对待：
-
-1. **烧录与上电**：STM32F103C8T6 + STM32F10x SPL，DHT11(PA5)、MQ135(PA1)、SSD1306(PB8/PB9)、LED(PA4)、蜂鸣器(PB13)、ESP8266(USART1 PA9/PA10)。记录板卡标识、接线、固件 commit、烧录工具与结果。
-2. **断网自治**：断开 AP 后确认采样节拍、滑窗滤波、阈值判断、轮播与声光报警继续工作；记录从断网到本地报警的延迟。
-3. **阈值掉电恢复**：经控制命令写入阈值 → 断电 → 上电 → 确认设备执行的是写入值而非编译期默认值。
-4. **DHT11 时序**：连续采样 1 小时的失败率与超时行为。
-5. **MQ135 标定**：预热曲线、负载电阻确认、标准气体标定；标定前 `gasPpm` 只是相对指标。
-6. **MQTT 实机链路**：见 §7，需先完成固件侧射频接线。
+1. **烧录与上电 —— 已执行（2026-09-22）**：STM32F103C8T6 + STM32F10x SPL，DHT11(PA5)、MQ135(PA1)、SSD1306(PB8/PB9)、LED(PA4)、蜂鸣器(PA8/TIM1_CH1)、ESP8266(USART1 PA9/PA10)。ST-LINK V2（J37S7）+ OpenOCD 0.12.0，release 构建 `program … verify reset`（Verify OK）。蜂鸣器早期方案记为 PB13，实机验收确认实际为 PA8。逐步证据见 `../hardware/README.md` 的「实机闭环验收记录」。
+2. **断网自治 —— 已执行（2026-09-22）**：停止 EMQX 容器使设备失去 Broker，SWD 直读 `GPIOA_ODR` PA4=1（LED 报警）且 `TIM1_CCER` CC1E 持续为 1（蜂鸣器输出仍在驱动），即本地采样、判断与声光报警不受网络影响。**未测**：拔掉 AP（Wi-Fi 断开）这一更强的场景，以及「从断网到本地报警的延迟」的量化。
+3. **阈值掉电恢复 —— 部分执行（2026-09-22）**：经控制命令写入 version 3（35/85/25）→ 设备复位 → 设备重新上线后遥测报警原因由 `temperature_high + gas_high` 变为仅 `gas_high`（与 35 ℃ 上限一致）→ SWD 直读 `0x0800F800` 得到 schema 1 / version 3 / 35 / 85 / 25 的记录，另一个槽位保持擦除态。**未做**真正的拔电（只做了复位）；双槽交替设计针对掉电窗口，但拔电验收仍待补。
+4. **DHT11 时序**：连续采样 1 小时的失败率与超时行为——**未执行**。
+5. **MQ135 标定**：预热曲线、负载电阻确认、标准气体标定；标定前 `gasPpm` 只是相对指标——**未执行**。
+6. **MQTT 实机链路**：见 §7，已完成上行与下行闭环。
 
 ## 7. 实机 MQTT 验收状态
 
@@ -163,6 +161,17 @@ curl -X POST 'http://localhost:8080/api/v1/devices/MCU001/commands/mute' \
 | 主循环只维护 TCP 文本帧 | 节拍驱动的会话状态机 | 需要 CONNECT → SUBSCRIBE → 发布/心跳 |
 
 实机首轮证据：EMQX 显示 `MCU001`/`device` 已连接且订阅 1 个主题；Backend 接收的遥测为 `network=online`；PostgreSQL 已按 `(deviceId, bootId, sequence)` 持久化。本轮还发现并修复了 `bootId` 中的连字符违反 Backend 字段约束的问题。
+
+### 7.1 下行控制闭环（2026-09-22）
+
+`device/control` 的 PUBLISH 已接入主循环。实机证据：
+
+- `POST /commands/mute {muted:true}` → 202 → Backend 记录 `command acknowledgement received … status:"applied"` → 命令资源 `state:"applied"`（accepted→completed 约 1 s）→ 下一次遥测 `buzzerMuted:true` 且 `localAlarm:true`、`alarmCauses` 不变 → OLED 人工确认显示 MUTED。
+- 解除静音同样 `applied`，遥测 `buzzerMuted:false`。
+- `PUT /thresholds` → `applied`、`confirmedVersion` 前进，复位后 Flash 记录仍在（详见 §6 第 3 项）。
+- 停止 EMQX 后设备失去 Broker 但本地报警继续（§6 第 2 项）；重启 EMQX 后设备**无需复位**自行重连并恢复上报（`bootId` 不变、`sequence` 续增）。
+
+**本轮暴露、尚未修复的 Backend 侧缺陷**：Backend 的 MQTT 会话每 30 秒断开一次（`connection lost: EOF`，与 keepalive 周期一致，日志可见 `reconnecting` 与 `mqtt connected` 交替），导致控制命令的 REST 调用约一半概率返回 503 `broker_unavailable`（`mqtt: not connected`）。设备侧路径本身已验证通过；该缺陷属 Backend 模块，需单独分支修复后才能把「命令下发成功率」列为验收项。
 
 ## 8. 未覆盖风险
 

@@ -15,7 +15,7 @@
 | 温湿度 | DHT11，PA5 | DHT11 可完成课设；SHT30 是精度升级项 | 先复用 DHT11 |
 | 气体 | MQ135，PA1/ADC1 Channel 1，10 次均值 | 固定窗口滑动平均、校准后输出 ADC 与估算值 | 保留原始 ADC 以便校准 |
 | 显示 | SSD1306，PB8/PB9 软件 I2C | 轮播数值、网络和报警状态 | 复用驱动，调整页面逻辑 |
-| 报警 | PA4 LED、PB13 蜂鸣器 | 断网自治；远程仅静音蜂鸣器 | 本地判断优先级最高 |
+| 报警 | PA4 LED、PA8/TIM1_CH1 蜂鸣器 | 断网自治；远程仅静音蜂鸣器 | 本地判断优先级最高；PB13 曾在方案中记为蜂鸣器，实机验收后确认实际接在 PA8 |
 | 联网 | ESP8266 USART1，TCP 文本帧 | MQTT 连接 EMQX，JSON Payload | 分阶段迁移并保留回退验证 |
 | Backend | Go 标准库路由骨架 | MQTT、持久化、复合预警、REST、WebSocket | 不改成 FastAPI/Spring Boot |
 | 客户端 | KMP 模板 + 微信原生示例 | 相同需求与 API 的两套实现 | 内部实现保持独立 |

@@ -4,6 +4,7 @@
 #include "OLED.h"
 #include "adc.h"
 #include "dht11.h"
+#include "control_link.h"
 #include "display_model.h"
 #include "env_monitor.h"
 #include "flash_config.h"
@@ -18,6 +19,12 @@
  * from the previous firmware, including the 44-character limit the panel
  * effectively imposed. */
 #define WIFI_MESSAGE_SIZE 64U
+
+/* Control acknowledgement staging. The rendered JSON is a couple of hundred
+ * bytes at its widest — a 32-character requestId, a 16-character bootId and the
+ * longest errorCode — so this leaves generous slack while staying small enough
+ * not to matter on a part with 20 KiB of RAM. */
+#define CONTROL_ACK_SIZE 384U
 
 /* Task cadence, in units of the main loop period.
  *
@@ -67,6 +74,92 @@ static uint16_t MqttTakePacketId(uint16_t *next)
     return current;
 }
 
+/* Radio handles the frame dispatcher needs. It exists because the dispatcher is
+ * a plain function pointer: the main loop keeps its buffers, its packet-id
+ * counter and its link state on the stack, so they have to be handed over
+ * explicitly rather than reached through the enclosing scope, which C does not
+ * provide. */
+typedef struct
+{
+    uint8_t *tx;
+    uint32_t capacity;
+    uint16_t *next_packet_id;
+    MqttLinkState *state;
+    uint32_t *last_activity_ms;
+    uint32_t now_ms;
+} ControlRadio;
+
+/* Put everything one received frame owes the wire on the wire.
+ *
+ * The MQTT session state machine runs first, because the subscription has to be
+ * in place before a command can be acted on and because the broker's CONNACK and
+ * SUBACK are what move the link into the state where commands are accepted. The
+ * control acknowledgements follow.
+ *
+ * Inside them the order matters. The MQTT PUBACK goes first because it is what
+ * stops the broker redelivering a frame that has already been decoded, and the
+ * command ACK follows because it answers the question the PUBACK deliberately
+ * leaves open — whether the command was understood and carried out. On a send
+ * failure part way through, the remaining send is still attempted: a lost command
+ * ACK is recoverable by the backend's timeout, whereas a withheld PUBACK costs a
+ * redelivery of a command that has already taken effect.
+ *
+ * Every frame is built into the transmission buffer, which is distinct from the
+ * receive buffer the command was decoded out of, so nothing here can be
+ * invalidated by the driver collecting the next packet. */
+static bool DispatchFrame(void *context, const MqttPacket *packet,
+                          const ControlOutcome *outcome, const uint8_t *ack_payload)
+{
+    ControlRadio *radio = (ControlRadio *)context;
+    bool sent = true;
+
+    if (*radio->state == MQTT_LINK_WAIT_CONNACK &&
+        packet->type == MQTT_PACKET_CONNACK &&
+        packet->return_code == MQTT_CONNACK_ACCEPTED)
+    {
+        uint32_t length = MqttEncodeSubscribe(radio->tx, radio->capacity,
+                                              MqttTakePacketId(radio->next_packet_id),
+                                              CONTROL_TOPIC_COMMAND, 1U);
+        if (length != 0U && MqttSend(radio->tx, length) != 0U)
+        {
+            *radio->state = MQTT_LINK_WAIT_SUBACK;
+            *radio->last_activity_ms = radio->now_ms;
+        }
+    }
+    else if (*radio->state == MQTT_LINK_WAIT_SUBACK && packet->type == MQTT_PACKET_SUBACK)
+    {
+        *radio->state = MQTT_LINK_ONLINE;
+        *radio->last_activity_ms = radio->now_ms;
+    }
+    else if (packet->type == MQTT_PACKET_PINGRESP)
+    {
+        *radio->last_activity_ms = radio->now_ms;
+    }
+
+    if (outcome->send_puback)
+    {
+        uint32_t length = MqttEncodePuback(radio->tx, radio->capacity,
+                                           outcome->puback_packet_id);
+        if (length == 0U || MqttSend(radio->tx, length) == 0U)
+        {
+            sent = false;
+        }
+    }
+
+    if (outcome->publish_ack)
+    {
+        uint32_t length = MqttEncodePublish(radio->tx, radio->capacity, outcome->ack_topic,
+                                            MqttTakePacketId(radio->next_packet_id), 1U,
+                                            ack_payload, outcome->ack_length);
+        if (length == 0U || MqttSend(radio->tx, length) == 0U)
+        {
+            sent = false;
+        }
+    }
+
+    return sent;
+}
+
 int main(void)
 {
     EnvMonitor monitor;
@@ -78,6 +171,9 @@ int main(void)
     DisplayPage page = DISPLAY_PAGE_CLIMATE;
     DisplayInput display;
     EnvEvaluation evaluation;
+    ControlLink controlLink;
+    ControlRadio controlRadio;
+    ESP8266ReceiveStats rxStats;
 
     uint8_t temperature = 0U;
     uint8_t humidity = 0U;
@@ -87,6 +183,7 @@ int main(void)
     MqttLinkState mqttState = MQTT_LINK_TCP;
     uint8_t mqttTx[MQTT_MAX_PACKET_SIZE];
     uint8_t mqttRx[MQTT_MAX_PACKET_SIZE];
+    uint8_t controlAck[CONTROL_ACK_SIZE];
     char telemetryJson[512];
     char bootId[17];
     uint16_t mqttRxLength = 0U;
@@ -153,9 +250,12 @@ int main(void)
      * keep alarming on the built-in limits rather than on zeros, which would
      * alarm on every sample.
      *
-     * The write path is driven by the control command handler and is not yet
-     * wired to the radio; see hardware/README.md. Until it is, a device flashed
-     * from this commit always reports no stored configuration. */
+     * The write path is driven by the control command handler in
+     * hardware/core/control_link.c: a set_thresholds command reaches the store
+     * only after the parser has accepted it, and the monitor adopts the new
+     * values only after the store reports the record written and verified. A
+     * device flashed from an empty part therefore still reports no stored
+     * configuration until the first such command arrives. */
     ThresholdStoreInit(&thresholdStore, FlashConfigPort());
     if (!FlashConfigSelfCheck())
     {
@@ -165,6 +265,18 @@ int main(void)
     {
         (void)EnvMonitorSetThresholds(&monitor, &storedThresholds, storedVersion);
     }
+
+    /* The control path is bound to the monitor and the store before either can be
+     * driven from the radio: the mute command acts on the monitor, and a
+     * threshold command is published as applied only after this store has written
+     * and verified the record. */
+    ControlLinkInit(&controlLink, DEVICE_ID, bootId, &monitor, &thresholdStore);
+    controlRadio.tx = mqttTx;
+    controlRadio.capacity = (uint32_t)sizeof(mqttTx);
+    controlRadio.next_packet_id = &mqttPacketId;
+    controlRadio.state = &mqttState;
+    controlRadio.last_activity_ms = &lastMqttActivityMs;
+    controlRadio.now_ms = 0U;
 
     dhtError = DHT11_Init();
     (void)dhtError;
@@ -211,11 +323,11 @@ int main(void)
 
         /* Only gas-related causes are audible in this stage. Other causes still
          * drive the LED, OLED and telemetry. The 200 ms / 800 ms cadence avoids
-         * a continuous tone while preserving an unmistakable local warning. */
-        buzzerActive = (uint8_t)(evaluation.buzzer_on &&
-                       ((evaluation.alarm_causes &
-                         (ENV_ALARM_GAS_HIGH | ENV_ALARM_RAPID_GAS_RISE)) != 0U) &&
-                       ((tick % GAS_BUZZER_PERIOD_TICKS) < GAS_BUZZER_ON_TICKS));
+         * a continuous tone while preserving an unmistakable local warning. The
+         * decision itself lives in the monitor so that the audible-cause filter,
+         * the cadence and the mute precedence are covered by the host tests
+         * rather than only by watching a board. */
+        buzzerActive = (uint8_t)(EnvMonitorBuzzerDrive(&evaluation, tick) ? 1U : 0U);
         if (buzzerActive != 0U)
         {
             BEEP_On();
@@ -251,6 +363,12 @@ int main(void)
              * looking at the device should be able to see that its stored
              * configuration area is unusable. */
             (void)thresholdAreaDamaged;
+            /* Likewise for frames the radio could not hand up: a counted loss is
+             * the only on-device evidence that a control command may have been
+             * dropped rather than never sent. */
+            ESP8266_GetReceiveStats(&rxStats);
+            display.rx_discarded = rxStats.discarded_frames;
+            display.rx_truncated = rxStats.truncated_frames;
             display.wifi_ssid = WIFI_SSID;
             display.server_message = wifiMessage;
 
@@ -264,42 +382,35 @@ int main(void)
             OLED_Update();
         }
 
-        /* --- MQTT uplink ---
+        /* --- MQTT downlink ---
          * ESP8266 carries raw MQTT bytes over a single TCP socket. Connection
          * acknowledgement and subscription acknowledgement are required before
          * the OLED reports the network online, preventing the former false
-         * positive where Wi-Fi association alone looked like cloud delivery. */
+         * positive where Wi-Fi association alone looked like cloud delivery.
+         *
+         * The whole received segment is scanned, not only its first frame: a TCP
+         * segment can carry several MQTT packets, and reading only the head would
+         * drop every command behind the first one without a trace. Every
+         * acknowledgement is built and sent inside the scan, before the driver can
+         * collect another segment into the buffer this one came from. */
         if (ESP8266_GetPacket(mqttRx, sizeof(mqttRx), &mqttRxLength) != 0U)
         {
-            MqttPacket incoming;
-            const char *rejectReason = 0;
-            if (MqttDecode(mqttRx, mqttRxLength, &incoming, &rejectReason))
-            {
-                if (mqttState == MQTT_LINK_WAIT_CONNACK &&
-                    incoming.type == MQTT_PACKET_CONNACK &&
-                    incoming.return_code == MQTT_CONNACK_ACCEPTED)
-                {
-                    uint32_t length = MqttEncodeSubscribe(mqttTx, sizeof(mqttTx),
-                                                          MqttTakePacketId(&mqttPacketId),
-                                                          "device/control", 1U);
-                    if (MqttSend(mqttTx, length) != 0U)
-                    {
-                        mqttState = MQTT_LINK_WAIT_SUBACK;
-                        lastMqttActivityMs = now_ms;
-                    }
-                }
-                else if (mqttState == MQTT_LINK_WAIT_SUBACK && incoming.type == MQTT_PACKET_SUBACK)
-                {
-                    mqttState = MQTT_LINK_ONLINE;
-                    lastMqttActivityMs = now_ms;
-                }
-                else if (incoming.type == MQTT_PACKET_PINGRESP)
-                {
-                    lastMqttActivityMs = now_ms;
-                }
-            }
-            (void)rejectReason;
+            controlRadio.now_ms = now_ms;
+            /* The acknowledgement counter is the same boot-scoped counter the
+             * telemetry frames report, so it is seeded here and read back after
+             * the scan: one number space, so the two streams can be ordered
+             * against each other. */
+            ControlLinkSetSequence(&controlLink, telemetrySequence);
+            (void)ControlLinkHandleBuffer(&controlLink, mqttRx, mqttRxLength, now_ms, now_ms,
+                                          controlAck, sizeof(controlAck), DispatchFrame,
+                                          &controlRadio);
+            telemetrySequence = ControlLinkSequence(&controlLink);
         }
+
+        /* The link state is published to the control path every iteration rather
+         * than only on the transition, so the two cannot drift apart after a TCP
+         * drop that the state machine notices and the control path does not. */
+        ControlLinkSetOnline(&controlLink, mqttState == MQTT_LINK_ONLINE);
 
         if (ESP8266_IsTcpConnected() == 0U)
         {
