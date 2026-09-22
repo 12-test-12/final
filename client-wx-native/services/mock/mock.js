@@ -108,7 +108,7 @@ function getLatest(deviceId) {
 }
 
 function getHistory(deviceId, query = {}) {
-  const limit = Math.min(Number(query.limit) || 60, 60)
+  const limit = Math.min(Number(query.limit) || 60, 200)
   const stepMs = 30 * 1000
   const base = Date.now()
   const items = []
@@ -134,6 +134,9 @@ function getHistory(deviceId, query = {}) {
       alarmCauses: [],
       buzzerMuted: state.buzzerMuted,
     })
+  }
+  if (query.order === 'desc') {
+    items.reverse()
   }
   return { items, nextCursor: null }
 }

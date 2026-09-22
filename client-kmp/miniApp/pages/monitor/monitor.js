@@ -68,6 +68,9 @@ Page({
 
   onShow() {
     this.startPolling()
+    if (this.data.tab === 1 && this.data.trends) {
+      this.drawTrendChart(this.data.trends)
+    }
   },
 
   onHide() {
@@ -77,6 +80,7 @@ Page({
   // A hidden or unloaded page must not keep a timer alive, otherwise it would
   // keep issuing requests and calling setData on a destroyed page.
   onUnload() {
+    this._unloaded = true
     this.stopPolling()
   },
 
@@ -133,7 +137,10 @@ Page({
       if (this.data.tab === 0) await this.loadDashboard(false)
       if (this.data.tab === 1) {
         const trends = JSON.parse(await runtime.trends(this.data.trendWindow, TREND_LIMIT))
-        this.setData({ trends })
+        this.setData({ trends, loading: false, error: '' }, () => {
+          this.drawTrendChart(trends)
+        })
+        return
       }
       if (this.data.tab === 2) {
         const page = JSON.parse(await runtime.alerts(this.data.alertFilter, ALERT_LIMIT))
@@ -152,6 +159,133 @@ Page({
     } catch (e) {
       this.setData({ loading: false, error: (e && e.message) || '数据加载失败' })
     }
+  },
+
+  drawTrendChart(trends) {
+    if (this._unloaded) return
+    if (!trends || !trends.hasData || !trends.series || !trends.series.length) return
+    const query = wx.createSelectorQuery().in(this)
+    query
+      .select('#trendCanvas')
+      .fields({ node: true, size: true })
+      .exec((res) => {
+        if (this._unloaded || !res || !res[0] || !res[0].node) return
+        const canvas = res[0].node
+        const ctx = canvas.getContext('2d')
+        const width = res[0].width
+        const height = res[0].height
+        if (!width || !height) return
+
+        const dpr = (wx.getWindowInfo && wx.getWindowInfo().pixelRatio) ||
+                    (wx.getSystemInfoSync && wx.getSystemInfoSync().pixelRatio) || 1
+        canvas.width = width * dpr
+        canvas.height = height * dpr
+        ctx.scale(dpr, dpr)
+
+        ctx.clearRect(0, 0, width, height)
+
+        const padLeft = 12
+        const padRight = 12
+        const padTop = 16
+        const padBottom = 16
+        const plotWidth = width - padLeft - padRight
+        const plotHeight = height - padTop - padBottom
+
+        // 1. Draw 4 horizontal grid lines
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)'
+        ctx.lineWidth = 1
+        for (let i = 0; i < 4; i++) {
+          const y = padTop + (i / 3) * plotHeight
+          ctx.beginPath()
+          ctx.moveTo(padLeft, y)
+          ctx.lineTo(width - padRight, y)
+          ctx.stroke()
+        }
+
+        const points = trends.series
+        let xCoords = []
+        if (points.length === 1) {
+          xCoords = [padLeft + plotWidth / 2]
+        } else {
+          const tMin = points[0].timestampEpochMs || 0
+          const tMax = points[points.length - 1].timestampEpochMs || 0
+          if (tMax <= tMin) {
+            const step = plotWidth / (points.length - 1)
+            xCoords = points.map((_, idx) => padLeft + idx * step)
+          } else {
+            const span = tMax - tMin
+            xCoords = points.map((p) => {
+              const fraction = Math.max(0, Math.min(1, ((p.timestampEpochMs || 0) - tMin) / span))
+              return padLeft + fraction * plotWidth
+            })
+          }
+        }
+
+        const drawSeries = (values, color) => {
+          const valid = values.filter((v) => v !== null && v !== undefined && !isNaN(v))
+          if (!valid.length) return
+          const minVal = Math.min(...valid)
+          const maxVal = Math.max(...valid)
+
+          const computeY = (v) => {
+            if (maxVal <= minVal) return padTop + plotHeight / 2
+            const span = maxVal - minVal
+            const pMin = minVal - span * 0.1
+            const pMax = maxVal + span * 0.1
+            const frac = Math.max(0, Math.min(1, (v - pMin) / (pMax - pMin)))
+            return height - padBottom - frac * plotHeight
+          }
+
+          let segments = []
+          let curSeg = []
+          let singles = []
+
+          for (let i = 0; i < values.length; i++) {
+            const v = values[i]
+            if (v === null || v === undefined || isNaN(v)) {
+              if (curSeg.length === 1) singles.push(curSeg[0])
+              else if (curSeg.length > 1) segments.push(curSeg)
+              curSeg = []
+            } else {
+              curSeg.push({ x: xCoords[i], y: computeY(v) })
+            }
+          }
+          if (curSeg.length === 1) singles.push(curSeg[0])
+          else if (curSeg.length > 1) segments.push(curSeg)
+
+          ctx.strokeStyle = color
+          ctx.lineWidth = 2
+          ctx.lineCap = 'round'
+          ctx.lineJoin = 'round'
+
+          segments.forEach((seg) => {
+            ctx.beginPath()
+            ctx.moveTo(seg[0].x, seg[0].y)
+            for (let i = 1; i < seg.length; i++) {
+              ctx.lineTo(seg[i].x, seg[i].y)
+            }
+            ctx.stroke()
+
+            ctx.fillStyle = color
+            seg.forEach((pt) => {
+              ctx.beginPath()
+              ctx.arc(pt.x, pt.y, 2.5, 0, Math.PI * 2)
+              ctx.fill()
+            })
+          })
+
+          ctx.fillStyle = color
+          singles.forEach((pt) => {
+            ctx.beginPath()
+            ctx.arc(pt.x, pt.y, 3.5, 0, Math.PI * 2)
+            ctx.fill()
+          })
+        }
+
+        drawSeries(points.map((p) => p.temperatureC), '#FB7185')
+        drawSeries(points.map((p) => p.humidityRh), '#7DD3FC')
+        drawSeries(points.map((p) => p.gasPpm), '#3FE8C3')
+      })
   },
 
   /**

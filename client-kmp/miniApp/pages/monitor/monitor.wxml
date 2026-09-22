@@ -124,15 +124,12 @@
       <view class="card chart-card">
         <view class="legend">
           <view class="legend-item" wx:for="{{trends.curveLegend}}" wx:key="label">
-            <view class="legend-dot dot-{{item.tone}}"></view><text>{{item.label}}</text>
+            <view class="legend-dot dot-{{item.tone}}"></view>
+            <text>{{item.label}}{{item.rangeText && item.rangeText !== '--' ? ' (' + item.rangeText + ')' : ''}}</text>
           </view>
         </view>
         <view class="chart-body">
-          <view class="grid-line" wx:for="{{[0,1,2,3]}}" wx:key="*this"></view>
-          <view class="chart-mask">
-            <view class="chart-mask-title">{{trends.curveMaskTitle}}</view>
-            <view class="chart-mask-sub">{{trends.curveMaskSub}}</view>
-          </view>
+          <canvas type="2d" id="trendCanvas" class="trend-canvas"></canvas>
         </view>
         <view class="chart-xaxis"><text>{{trends.curveAxisStart}}</text><text>{{trends.curveAxisEnd}}</text></view>
       </view>

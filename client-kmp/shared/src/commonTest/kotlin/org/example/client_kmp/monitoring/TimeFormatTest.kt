@@ -64,4 +64,24 @@ class TimeFormatTest {
         assertEquals(86_400_000L, Rfc3339.hoursToMillis(24))
         assertEquals(0L, Rfc3339.hoursToMillis(0))
     }
+
+    @Test
+    fun parsesStandardRfc3339Timestamps() {
+        assertEquals(0L, Rfc3339.parseEpochMillis("1970-01-01T00:00:00Z"))
+        assertEquals(1_000L, Rfc3339.parseEpochMillis("1970-01-01T00:00:01Z"))
+        assertEquals(1_790_040_645_000L, Rfc3339.parseEpochMillis("2026-09-22T01:30:45Z"))
+        assertEquals(1_790_040_645_250L, Rfc3339.parseEpochMillis("2026-09-22T01:30:45.250Z"))
+        // Offset +08:00
+        assertEquals(1_790_040_645_000L, Rfc3339.parseEpochMillis("2026-09-22T09:30:45+08:00"))
+        // Offset -05:00
+        assertEquals(1_790_040_645_000L, Rfc3339.parseEpochMillis("2026-09-21T20:30:45-05:00"))
+    }
+
+    @Test
+    fun invalidTimestampsReturnNull() {
+        assertEquals(null, Rfc3339.parseEpochMillis("not-a-time"))
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-13-01T00:00:00Z"))
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-01-32T00:00:00Z"))
+        assertEquals(null, Rfc3339.parseEpochMillis("2026-01-01T25:00:00Z"))
+    }
 }

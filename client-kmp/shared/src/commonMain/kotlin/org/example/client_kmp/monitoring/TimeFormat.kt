@@ -56,6 +56,85 @@ internal object Rfc3339 {
         }
     }
 
+    /**
+     * Parses an RFC 3339 timestamp into epoch milliseconds. Returns null if invalid.
+     */
+    fun parseEpochMillis(iso: String): Long? {
+        if (iso.length < 20) return null
+        return try {
+            val year = iso.substring(0, 4).toIntOrNull() ?: return null
+            if (iso[4] != '-') return null
+            val month = iso.substring(5, 7).toIntOrNull() ?: return null
+            if (iso[7] != '-') return null
+            val day = iso.substring(8, 10).toIntOrNull() ?: return null
+            if (iso[10] != 'T' && iso[10] != 't') return null
+            val hour = iso.substring(11, 13).toIntOrNull() ?: return null
+            if (iso[13] != ':') return null
+            val minute = iso.substring(14, 16).toIntOrNull() ?: return null
+            if (iso[16] != ':') return null
+            val second = iso.substring(17, 19).toIntOrNull() ?: return null
+
+            if (month !in 1..12 || day !in 1..31 || hour !in 0..23 || minute !in 0..59 || second !in 0..59) {
+                return null
+            }
+
+            var idx = 19
+            var millis = 0L
+            if (idx < iso.length && iso[idx] == '.') {
+                idx++
+                val start = idx
+                while (idx < iso.length && iso[idx].isDigit()) {
+                    idx++
+                }
+                val fracStr = iso.substring(start, idx)
+                if (fracStr.isNotEmpty()) {
+                    val padded = fracStr.padEnd(3, '0').take(3)
+                    millis = padded.toLongOrNull() ?: return null
+                }
+            }
+
+            var offsetMinutes = 0
+            if (idx < iso.length) {
+                val tzChar = iso[idx]
+                if (tzChar == 'Z' || tzChar == 'z') {
+                    // UTC
+                } else if (tzChar == '+' || tzChar == '-') {
+                    val sign = if (tzChar == '+') 1 else -1
+                    val tzPart = iso.substring(idx + 1)
+                    val parts = tzPart.split(':')
+                    if (parts.size == 2) {
+                        val tzH = parts[0].toIntOrNull() ?: return null
+                        val tzM = parts[1].toIntOrNull() ?: return null
+                        offsetMinutes = sign * (tzH * 60 + tzM)
+                    } else {
+                        return null
+                    }
+                } else {
+                    return null
+                }
+            }
+
+            val days = daysFromCivil(year.toLong(), month.toLong(), day.toLong())
+            val timeMillis = hour * 3600_000L + minute * 60_000L + second * 1000L + millis
+            days * MILLIS_PER_DAY + timeMillis - offsetMinutes * 60_000L
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Howard Hinnant's `days_from_civil`: converts (year, month, day) into days since 1970-01-01.
+     */
+    private fun daysFromCivil(year: Long, month: Long, day: Long): Long {
+        val y = if (month <= 2L) year - 1L else year
+        val era = floorDiv(y, 400L)
+        val yoe = y - era * 400L
+        val m = if (month > 2L) month - 3L else month + 9L
+        val doy = (153L * m + 2L) / 5L + day - 1L
+        val doe = yoe * 365L + yoe / 4L - yoe / 100L + doy
+        return era * 146_097L + doe - 719_468L
+    }
+
     private data class CivilDate(val year: Long, val month: Long, val day: Long)
 
     /**

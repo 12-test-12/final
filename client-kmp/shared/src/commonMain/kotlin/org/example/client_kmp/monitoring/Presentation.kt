@@ -14,12 +14,12 @@ import kotlin.math.roundToInt
  */
 private const val MUTE_HINT = "静音不影响环境检测与告警上报"
 private const val SAVE_HINT = "下发后需设备确认，确认前仍按旧规则报警"
-private const val CURVE_STATUS_TEXT = "折线图下一步接入"
-private const val CURVE_MASK_TITLE = "趋势曲线即将上线"
-private const val CURVE_MASK_SUB = "三指标同屏对比"
+private const val CURVE_STATUS_TEXT = "各指标按独立量程展示"
+private const val CURVE_MASK_TITLE = "三条曲线按各自量程展示"
+private const val CURVE_MASK_SUB = "用于观察变化趋势，不用于直接比较曲线高度"
 private const val CURVE_AXIS_START = "区间起点"
 private const val CURVE_AXIS_END = "此刻"
-private const val TRENDS_FOOTER_HINT = "统计基于所选区间内的真实历史样本计算"
+private const val TRENDS_FOOTER_HINT = "三条曲线按各自量程展示，用于观察变化趋势，不用于直接比较曲线高度；数据受最近一页最多200条限制"
 
 /**
  * Threshold ranges frozen by `docs/api/openapi.yaml`.
@@ -106,7 +106,7 @@ data class SelectorOptions(
  * gas to the mint accent, and the same mapping is used by the dashboard meters.
  */
 @Serializable
-data class CurveLegend(val label: String, val tone: String)
+data class CurveLegend(val label: String, val tone: String, val rangeText: String = "")
 
 /**
  * Everything the dashboard needs, already formatted and scaled.
@@ -179,6 +179,10 @@ data class TrendPointView(
     val humidityText: String,
     val gasText: String,
     val localAlarm: Boolean,
+    val timestampEpochMs: Long = 0L,
+    val temperatureC: Double = 0.0,
+    val humidityRh: Double = 0.0,
+    val gasPpm: Double? = null,
 )
 
 /**
@@ -371,28 +375,38 @@ object MonitoringPresentation {
      */
     fun trends(points: List<TelemetryPoint>, window: TrendWindow = TrendWindow.LAST_HOUR): TrendsView {
         val gasReadings = points.mapNotNull { it.gasPpm }
+        val tempSummary = summarize(points) { it.temperatureC }
+        val humSummary = summarize(points) { it.humidityRh }
+        val gasSummary = summarize(points) { it.gasPpm }
+
+        val tempRange = if (points.isNotEmpty()) "${tempSummary.minimum}~${tempSummary.maximum}°C" else ""
+        val humRange = if (points.isNotEmpty()) "${humSummary.minimum}~${humSummary.maximum}%" else ""
+        val gasRange = if (gasReadings.isNotEmpty()) "${gasSummary.minimum}~${gasSummary.maximum}ppm" else ""
+
+        val axisStart = if (points.isNotEmpty()) clockText(points.first().receivedAt) else "--"
+        val axisEnd = if (points.isNotEmpty()) clockText(points.last().receivedAt) else "--"
+        val statusText = if (points.isNotEmpty()) CURVE_STATUS_TEXT else "暂无数据"
+
         return TrendsView(
             sampleCount = points.size,
             hasData = points.isNotEmpty(),
-            temperature = summarize(points) { it.temperatureC },
-            humidity = summarize(points) { it.humidityRh },
-            gas = summarize(points) { it.gasPpm },
+            temperature = tempSummary,
+            humidity = humSummary,
+            gas = gasSummary,
             gasSampleCount = gasReadings.size,
             windowKey = window.name,
             windowLabel = window.label,
             windowOptions = trendWindowOptions(),
-            curveStatusText = CURVE_STATUS_TEXT,
+            curveStatusText = statusText,
             curveMaskTitle = CURVE_MASK_TITLE,
             curveMaskSub = CURVE_MASK_SUB,
-            curveAxisStart = CURVE_AXIS_START,
-            curveAxisEnd = CURVE_AXIS_END,
-            // The curve is not drawn yet on either host, so the placeholder is
-            // what the user sees and this stays false until a chart is wired in.
-            curveReady = false,
+            curveAxisStart = axisStart,
+            curveAxisEnd = axisEnd,
+            curveReady = points.isNotEmpty(),
             curveLegend = listOf(
-                CurveLegend("温度", Tone.DANGER),
-                CurveLegend("湿度", Tone.INFO),
-                CurveLegend("气体", Tone.MINT),
+                CurveLegend("温度", Tone.DANGER, tempRange),
+                CurveLegend("湿度", Tone.INFO, humRange),
+                CurveLegend("气体", Tone.MINT, gasRange),
             ),
             footerHint = TRENDS_FOOTER_HINT,
             series = points.mapIndexed { index, point -> trendPoint(point, index) },
@@ -409,6 +423,10 @@ object MonitoringPresentation {
         humidityText = reading(point.humidityRh),
         gasText = point.gasPpm?.let(::reading) ?: "--",
         localAlarm = point.localAlarm,
+        timestampEpochMs = Rfc3339.parseEpochMillis(point.receivedAt) ?: 0L,
+        temperatureC = point.temperatureC,
+        humidityRh = point.humidityRh,
+        gasPpm = point.gasPpm,
     )
 
     /**
