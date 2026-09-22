@@ -1,0 +1,12 @@
+{
+  "pages": ["pages/monitor/monitor"],
+  "window": {
+    "navigationBarTextStyle": "white",
+    "navigationBarTitleText": "机房环境监控",
+    "navigationBarBackgroundColor": "#071310",
+    "backgroundColor": "#071310"
+  },
+  "style": "v2",
+  "componentFramework": "glass-easel",
+  "sitemapLocation": "sitemap.json"
+}

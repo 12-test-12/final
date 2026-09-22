@@ -1,0 +1,160 @@
+<!--
+  WeChat host UI. Every label, colour token and formatted value comes from the
+  KMP shared runtime, so this file only arranges data and never derives it.
+  Run `./gradlew prepareMiniAppHost` in client-kmp before opening DevTools.
+-->
+<view class="page">
+  <view class="page-title">{{title}}</view>
+  <view class="page-sub">{{subtitle}}</view>
+  <view class="hint" wx:if="{{loading}}">数据加载中...</view>
+  <view class="hint danger" wx:if="{{error}}">{{error}}</view>
+
+  <!-- 监控 -->
+  <block wx:if="{{tab === 0 && dashboard}}">
+    <view class="card tone-{{dashboard.riskTone}}">
+      <view class="muted">系统风险状态</view>
+      <view class="row risk-row">
+        <text class="risk-text">{{dashboard.riskText}}</text>
+        <text class="pill {{dashboard.online ? 'pill-mint' : 'pill-muted'}}">{{dashboard.connectivityText}}</text>
+      </view>
+      <view class="muted">{{dashboard.riskDetail}}</view>
+    </view>
+
+    <view class="hint" wx:if="{{!dashboard.hasData}}">该设备尚未上报有效遥测数据</view>
+
+    <view class="section-head"><text class="section-title">实时数据</text><text class="section-tip">每 3 秒同步</text></view>
+    <view class="meters">
+      <view class="meter">
+        <text class="meter-label">T 温度</text>
+        <view class="meter-value">{{dashboard.temperatureText}}<text>°C</text></view>
+        <view class="track"><view class="fill temp" style="width:{{dashboard.temperaturePercent}}%"></view></view>
+      </view>
+      <view class="meter">
+        <text class="meter-label">H 湿度</text>
+        <view class="meter-value">{{dashboard.humidityText}}<text>%</text></view>
+        <view class="track"><view class="fill hum" style="width:{{dashboard.humidityPercent}}%"></view></view>
+      </view>
+      <view class="meter">
+        <text class="meter-label">G 气体</text>
+        <view class="meter-value">{{dashboard.gasText}}<text>ppm</text></view>
+        <view class="track"><view class="fill gas" style="width:{{dashboard.gasPercent}}%"></view></view>
+      </view>
+    </view>
+
+    <view class="section-head"><text class="section-title">设备状态</text><text class="section-tip">本地采集终端</text></view>
+    <view class="card">
+      <view class="device-name">{{dashboard.deviceId}}</view>
+      <view class="kv">
+        <text>本地报警</text>
+        <text class="{{dashboard.localAlarm ? 'danger' : 'mint'}}">{{dashboard.localAlarmText}}</text>
+      </view>
+      <view class="kv"><text>声光提示</text><text>{{dashboard.buzzerText}}</text></view>
+      <view class="kv"><text>更新时间</text><text>{{dashboard.updatedAt}}</text></view>
+    </view>
+
+    <view class="section-head"><text class="section-title">远程控制</text><text class="section-tip">静音不影响检测与上报</text></view>
+    <view class="card">
+      <view class="control-title">蜂鸣器控制</view>
+      <view class="muted">本地报警状态不会因静音而清除</view>
+      <view class="command-hint" wx:if="{{commandHint}}">{{commandHint}}</view>
+      <button class="btn" disabled="{{muting}}" bindtap="onMute">
+        {{dashboard.buzzerMuted ? '恢复鸣叫' : '远程静音'}}
+      </button>
+    </view>
+  </block>
+
+  <!-- 趋势 -->
+  <block wx:if="{{tab === 1}}">
+    <view class="hint" wx:if="{{trends && !trends.hasData}}">所选区间内没有遥测样本</view>
+    <block wx:if="{{trends && trends.hasData}}">
+      <view class="section-head"><text class="section-title">统计摘要</text><text class="section-tip">共 {{trends.sampleCount}} 条样本</text></view>
+      <scroll-view scroll-x class="stats"><view class="stats-inner">
+        <view class="stat card">
+          <text class="muted">温度 °C</text>
+          <text class="stat-main">{{trends.temperature.average}}</text>
+          <text class="muted">最低 {{trends.temperature.minimum}} · 最高 {{trends.temperature.maximum}}</text>
+        </view>
+        <view class="stat card">
+          <text class="muted">湿度 %RH</text>
+          <text class="stat-main">{{trends.humidity.average}}</text>
+          <text class="muted">最低 {{trends.humidity.minimum}} · 最高 {{trends.humidity.maximum}}</text>
+        </view>
+        <view class="stat card">
+          <text class="muted">气体 ppm</text>
+          <text class="stat-main">{{trends.gas.average}}</text>
+          <text class="muted">
+            <block wx:if="{{trends.gasSampleCount > 0}}">最低 {{trends.gas.minimum}} · 最高 {{trends.gas.maximum}}</block>
+            <block wx:else>无已校准气体读数</block>
+          </text>
+        </view>
+      </view></scroll-view>
+      <view class="section-head"><text class="section-title">采样序列</text><text class="section-tip">按时间升序</text></view>
+      <view class="card">
+        <view class="trend-row" wx:for="{{trends.series}}" wx:key="key">
+          <text>{{item.timeText}}</text>
+          <text>{{item.temperatureText}}° · {{item.humidityText}}% · {{item.gasText}}ppm</text>
+        </view>
+      </view>
+    </block>
+  </block>
+
+  <!-- 告警 -->
+  <block wx:if="{{tab === 2}}">
+    <view class="hint" wx:if="{{!loading && alertCount === 0}}">暂无告警记录</view>
+    <view class="card alert tone-{{item.tone}}" wx:for="{{alerts}}" wx:key="id">
+      <view class="row">
+        <text class="pill pill-{{item.tone}}">{{item.stateText}}</text>
+        <text class="muted">{{item.startedAt}}</text>
+      </view>
+      <view class="kv"><text>结束时间</text><text>{{item.endedAt}}</text></view>
+      <view class="evidence">
+        <view class="kv"><text>气体 ADC 上升</text><text>{{item.gasAdcRiseText}}（阈值 {{item.gasAdcRiseThresholdText}}）</text></view>
+        <view class="kv"><text>温升速率</text><text>{{item.temperatureRateText}}（阈值 {{item.temperatureRateThresholdText}}）</text></view>
+        <view class="kv"><text>样本数</text><text>{{item.sampleCountText}}</text></view>
+        <view class="kv"><text>窗口</text><text>{{item.windowSecondsText}} 秒</text></view>
+      </view>
+    </view>
+  </block>
+
+  <!-- 设置 -->
+  <block wx:if="{{tab === 3 && settings}}">
+    <view class="command-hint" wx:if="{{commandHint}}">{{commandHint}}</view>
+    <view class="threshold card">
+      <text class="muted">温度上限</text>
+      <view class="set-value">{{temperatureHighC}} <text>°C</text></view>
+      <slider min="0" max="80" step="0.5" value="{{temperatureHighC}}" activeColor="#3fe8c3"
+              bindchanging="onTemp" bindchange="onTemp" />
+    </view>
+    <view class="threshold card">
+      <text class="muted">湿度上限</text>
+      <view class="set-value">{{humidityHighRh}} <text>%RH</text></view>
+      <slider min="0" max="100" step="1" value="{{humidityHighRh}}" activeColor="#3fe8c3"
+              bindchanging="onHumidity" bindchange="onHumidity" />
+    </view>
+    <view class="threshold card">
+      <text class="muted">气体浓度上限</text>
+      <view class="set-value">{{gasHighPpm}} <text>ppm</text></view>
+      <slider min="1" max="999" step="1" value="{{gasHighPpm}}" activeColor="#3fe8c3"
+              bindchanging="onGas" bindchange="onGas" />
+    </view>
+
+    <view class="section-head"><text class="section-title">设备确认</text><text class="section-tip">202 仅表示命令已接受</text></view>
+    <view class="card">
+      <view class="kv">
+        <text>规则同步状态</text>
+        <text class="tone-text-{{settings.confirmationTone}}">{{settings.confirmationText}}</text>
+      </view>
+      <view class="kv"><text>期望版本</text><text>{{settings.desiredVersion}}</text></view>
+      <view class="kv"><text>设备确认版本</text><text>{{settings.confirmedVersion || '--'}}</text></view>
+      <view class="kv"><text>更新时间</text><text>{{settings.updatedAt}}</text></view>
+    </view>
+    <button class="btn" loading="{{saving}}" disabled="{{saving}}" bindtap="onSave">保存并下发到设备</button>
+  </block>
+</view>
+
+<view class="bottom-nav">
+  <view class="nav-item {{tab === 0 ? 'nav-active' : ''}}" data-tab="0" bindtap="onTab"><text class="nav-icon">◉</text><text>监控</text></view>
+  <view class="nav-item {{tab === 1 ? 'nav-active' : ''}}" data-tab="1" bindtap="onTab"><text class="nav-icon">⌁</text><text>趋势</text></view>
+  <view class="nav-item {{tab === 2 ? 'nav-active' : ''}}" data-tab="2" bindtap="onTab"><text class="nav-icon">!</text><text>告警</text></view>
+  <view class="nav-item {{tab === 3 ? 'nav-active' : ''}}" data-tab="3" bindtap="onTab"><text class="nav-icon">⚙</text><text>设置</text></view>
+</view>
