@@ -42,23 +42,50 @@ class MonitoringClient(
     }
 
     /**
-     * Loads recent samples in ascending event-time order.
+     * Loads the samples inside [window], oldest first.
      *
-     * `order=asc` is sent explicitly rather than relying on the server default so
-     * a host can never receive newest-first data by accident.
+     * The query is bounded by absolute `from`/`to` bounds rather than by `limit`
+     * alone. A bare limit returns the *oldest* rows the range allows, so a 24-hour
+     * window would describe its opening minutes and present them as the trend of
+     * the whole day. The page is therefore requested newest-first, so the rows that
+     * survive the page limit are the ones nearest now, and then reversed here so
+     * every statistic downstream sees ascending event time.
+     *
+     * A window can hold more samples than one page will return: the device reports
+     * every five seconds, so an hour is already about 720 rows against a 200-row
+     * default. The statistics therefore describe the most recent page inside the
+     * window rather than every sample in it. Covering a whole window exactly needs
+     * an aggregation endpoint the contract does not have; until then the sample
+     * count the UI shows is the honest "rows summarised" figure.
      */
-    suspend fun loadTrends(limit: Int = DEFAULT_SAMPLE_LIMIT): TrendsView {
+    suspend fun loadTrends(
+        window: TrendWindow = TrendWindow.LAST_HOUR,
+        limit: Int = DEFAULT_TREND_LIMIT,
+    ): TrendsView {
         val safeLimit = limit.coerceIn(1, MAX_SAMPLE_LIMIT)
-        val page: TelemetryPage =
-            get("/api/v1/devices/$deviceId/telemetry?limit=$safeLimit&order=asc")
-        return MonitoringPresentation.trends(page.items)
+        val to = platform.nowMillis()
+        val from = to - Rfc3339.hoursToMillis(window.hours)
+        val query = "?from=${Rfc3339.utcFromEpochMillis(from)}" +
+            "&to=${Rfc3339.utcFromEpochMillis(to)}" +
+            "&limit=$safeLimit&order=desc"
+        val page: TelemetryPage = get("/api/v1/devices/$deviceId/telemetry$query")
+        return MonitoringPresentation.trends(page.items.reversed(), window)
     }
 
-    /** Loads the newest alert events up to the contract limit. */
-    suspend fun loadAlerts(limit: Int = DEFAULT_ALERT_LIMIT): AlertsView {
+    /**
+     * Loads the newest alert events up to the contract limit, narrowed by [filter].
+     *
+     * The filter is applied to the fetched page rather than sent to the server,
+     * because the alerts query has no state parameter; one request per page keeps
+     * switching a pill free.
+     */
+    suspend fun loadAlerts(
+        limit: Int = DEFAULT_ALERT_LIMIT,
+        filter: AlertFilter = AlertFilter.ALL,
+    ): AlertsView {
         val safeLimit = limit.coerceIn(1, MAX_SAMPLE_LIMIT)
         val page: AlertPage = get("/api/v1/devices/$deviceId/alerts?limit=$safeLimit")
-        return MonitoringPresentation.alerts(page.items)
+        return MonitoringPresentation.alerts(page.items, filter)
     }
 
     /** Loads desired and device-confirmed threshold state. */
@@ -162,6 +189,9 @@ class MonitoringClient(
     /** Encodes a command lifecycle view as plain JSON for non-Kotlin hosts. */
     fun encodeCommandStatus(value: CommandStatusView): String = json.encodeToString(value)
 
+    /** Encodes the selector option lists as plain JSON for non-Kotlin hosts. */
+    fun encodeSelectors(value: SelectorOptions): String = json.encodeToString(value)
+
     private suspend inline fun <reified T> get(path: String): T = decode(platform.request(HttpRequest(baseUrl + path)))
 
     /** Returns null instead of throwing when the backend answers with [on]. */
@@ -218,8 +248,13 @@ class MonitoringClient(
     }
 
     companion object {
-        /** Matches the contract's `limit` default. */
-        const val DEFAULT_SAMPLE_LIMIT = 60
+        /**
+         * Page size for the trends query. It matches the backend's own default
+         * page size: large enough that a window's recent span is described by
+         * more than a handful of rows, small enough that the JSON stays inside a
+         * phone-hotspot budget for a MiniApp fetch.
+         */
+        const val DEFAULT_TREND_LIMIT = 200
         const val DEFAULT_ALERT_LIMIT = 50
 
         /** Contract maximum accepted by the backend query. */

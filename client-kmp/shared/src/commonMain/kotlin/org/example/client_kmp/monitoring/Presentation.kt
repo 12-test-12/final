@@ -2,6 +2,24 @@ package org.example.client_kmp.monitoring
 
 import kotlinx.serialization.Serializable
 import kotlin.math.round
+import kotlin.math.roundToInt
+
+/**
+ * Copy shared by both hosts.
+ *
+ * These strings are the frozen baseline's wording. They live here rather than in
+ * each host because a promise about what a control does, or a note that says the
+ * curve is unfinished, must not be able to differ between Android and the
+ * MiniApp for the same backend state.
+ */
+private const val MUTE_HINT = "静音不影响环境检测与告警上报"
+private const val SAVE_HINT = "下发后需设备确认，确认前仍按旧规则报警"
+private const val CURVE_STATUS_TEXT = "折线图下一步接入"
+private const val CURVE_MASK_TITLE = "趋势曲线即将上线"
+private const val CURVE_MASK_SUB = "三指标同屏对比"
+private const val CURVE_AXIS_START = "区间起点"
+private const val CURVE_AXIS_END = "此刻"
+private const val TRENDS_FOOTER_HINT = "统计基于所选区间内的真实历史样本计算"
 
 /**
  * Threshold ranges frozen by `docs/api/openapi.yaml`.
@@ -25,6 +43,70 @@ object Tone {
     const val DANGER = "danger"
     const val INFO = "info"
 }
+
+/**
+ * History windows offered by the trends page.
+ *
+ * The labels are the frozen baseline's copy (`client-wx-native/pages/trends`):
+ * both hosts render them verbatim, so keeping them here is what stops Android
+ * and the MiniApp from drifting into different window names for the same span.
+ * [hours] is what turns a selection into the contract's absolute `from` bound.
+ */
+enum class TrendWindow(val label: String, val hours: Int) {
+    LAST_HOUR("近1小时", 1),
+    LAST_SIX_HOURS("近6小时", 6),
+    LAST_DAY("近24小时", 24),
+}
+
+/**
+ * Filters offered by the alerts page.
+ *
+ * The baseline's third pill is `已确认`, which this client cannot offer: the
+ * backend's alert vocabulary has no acknowledged state (the contract models
+ * `normal`, `suspect`, `fire_warning` and `recovered` only), so offering the pill
+ * would filter every list down to nothing. `疑似` takes its place, which keeps
+ * four pills in the baseline's order and every pill able to return rows.
+ */
+enum class AlertFilter(val key: String, val label: String) {
+    ALL("all", "全部"),
+    FIRE_WARNING("fire_warning", "火情"),
+    SUSPECT("suspect", "疑似"),
+    RECOVERED("recovered", "已恢复"),
+}
+
+/**
+ * One entry of a segmented selector.
+ *
+ * It carries no selected state on purpose: which option is active is host state,
+ * and a view that mirrored it would have two sources for one fact. Hosts compare
+ * [key] against the key on the view they are rendering.
+ */
+@Serializable
+data class SelectOption(val key: String, val label: String)
+
+/**
+ * Every selector option the UI can offer, without needing a fetched view.
+ *
+ * The MiniApp has to draw the trends window selector before its first history
+ * response arrives, and it cannot reach a Kotlin enum from WXML. Exposing the
+ * option lists here keeps the labels in the shared layer, so the selector copy
+ * exists once instead of being restated in the page script.
+ */
+@Serializable
+data class SelectorOptions(
+    val windows: List<SelectOption>,
+    val filters: List<SelectOption>,
+)
+
+/**
+ * One legend entry above the trends curve.
+ *
+ * The tone is shared so both hosts pick the same colour for the same metric; the
+ * baseline maps temperature to its danger colour, humidity to its info colour and
+ * gas to the mint accent, and the same mapping is used by the dashboard meters.
+ */
+@Serializable
+data class CurveLegend(val label: String, val tone: String)
 
 /**
  * Everything the dashboard needs, already formatted and scaled.
@@ -56,11 +138,29 @@ data class DashboardView(
     val buzzerText: String,
     val buzzerMuted: Boolean,
     val updatedAt: String,
+    /**
+     * Copy for the mute control, worded the way the frozen baseline words it.
+     * Both hosts render it, so the promise a user reads before tapping the button
+     * cannot differ between them.
+     */
+    val muteHint: String,
 )
 
-/** Minimum / average / maximum of one metric, pre-formatted for display. */
+/**
+ * Minimum / average / maximum of one metric, pre-formatted for display, plus the
+ * time the maximum was recorded.
+ *
+ * `peakAt` answers "when was it worst", which a min/avg/max triple alone cannot:
+ * a peak at 03:00 and a peak at 09:00 describe very different rooms. It is an
+ * empty cell when there are no samples rather than a fabricated timestamp.
+ */
 @Serializable
-data class MetricSummary(val minimum: String, val average: String, val maximum: String)
+data class MetricSummary(
+    val minimum: String,
+    val average: String,
+    val maximum: String,
+    val peakAt: String,
+)
 
 /**
  * One trend row, pre-formatted for list rendering.
@@ -84,8 +184,11 @@ data class TrendPointView(
 /**
  * Historical statistics plus the ordered rows they were computed from.
  *
- * `series` keeps the backend's ascending event-time order; hosts must not
- * assume the newest sample is first.
+ * `series` keeps ascending event-time order and is retained for the chart that
+ * will replace the curve placeholder. Hosts must not render it as a list in its
+ * place: a table of samples is not a trend curve, and presenting one as the
+ * "curve" would report the design goal as met when it is not. [curveReady] is
+ * the single flag that says which of the two the user is looking at.
  */
 @Serializable
 data class TrendsView(
@@ -95,6 +198,24 @@ data class TrendsView(
     val humidity: MetricSummary,
     val gas: MetricSummary,
     val gasSampleCount: Int,
+    val windowKey: String,
+    val windowLabel: String,
+    val windowOptions: List<SelectOption>,
+    /** Section tip on the curve block. */
+    val curveStatusText: String,
+    val curveMaskTitle: String,
+    val curveMaskSub: String,
+    val curveAxisStart: String,
+    val curveAxisEnd: String,
+    /**
+     * False while the curve is a placeholder. Nothing in this client draws a
+     * curve yet — no canvas, no path geometry — so the hosts render the
+     * placeholder frame and this flag records the outstanding work instead of
+     * letting a sample list stand in for it.
+     */
+    val curveReady: Boolean,
+    val curveLegend: List<CurveLegend>,
+    val footerHint: String,
     val series: List<TrendPointView>,
 )
 
@@ -121,14 +242,36 @@ data class AlertItemView(
     val windowSecondsText: String,
 )
 
-/** Alert-list payload shared by Android and MiniApp hosts. */
+/**
+ * Alert-list payload shared by Android and MiniApp hosts.
+ *
+ * `count` is how many events the backend returned and `visibleCount` how many of
+ * them the active filter keeps, so a host can tell "this device has no alerts"
+ * from "this filter has no alerts" without re-deriving the filter itself.
+ */
 @Serializable
-data class AlertsView(val count: Int, val items: List<AlertItemView>)
+data class AlertsView(
+    val count: Int,
+    val visibleCount: Int,
+    /** Which filter produced [items]; hosts compare it to mark the active pill. */
+    val filterKey: String,
+    val filters: List<SelectOption>,
+    val items: List<AlertItemView>,
+)
 
 /** Threshold settings with device-confirmation wording resolved. */
 @Serializable
 data class SettingsView(
     val temperatureHighC: Double,
+    /**
+     * The humidity limit is carried but not exposed as a control.
+     *
+     * The frozen baseline's settings page offers temperature and gas only, and
+     * this client follows it. The value still has to travel: the contract's
+     * threshold update requires all three fields, so the host sends the limit the
+     * device already reports rather than inventing one. Exposing a humidity
+     * slider is recorded as outstanding work rather than dropped silently.
+     */
     val humidityHighRh: Double,
     val gasHighPpm: Double,
     val desiredVersion: Int,
@@ -139,6 +282,8 @@ data class SettingsView(
     val confirmed: Boolean,
     val awaitingDevice: Boolean,
     val updatedAt: String,
+    /** Copy under the save button; the baseline's wording. */
+    val saveHint: String,
 )
 
 /** Lifecycle wording for a control command; `confirmed` is true only after the device said so. */
@@ -192,9 +337,9 @@ object MonitoringPresentation {
                 Connectivity.offline -> "离线"
                 Connectivity.unknown -> "未知"
             },
-            temperatureText = telemetry?.let { decimal(it.temperatureC) } ?: "--",
-            humidityText = telemetry?.let { decimal(it.humidityRh) } ?: "--",
-            gasText = telemetry?.gasPpm?.let(::decimal) ?: "--",
+            temperatureText = telemetry?.let { reading(it.temperatureC) } ?: "--",
+            humidityText = telemetry?.let { reading(it.humidityRh) } ?: "--",
+            gasText = telemetry?.gasPpm?.let(::reading) ?: "--",
             gasAvailable = telemetry?.gasPpm != null,
             temperaturePercent = percent(telemetry?.temperatureC, ThresholdLimits.TEMPERATURE_MAX_C),
             humidityPercent = percent(telemetry?.humidityRh, ThresholdLimits.HUMIDITY_MAX_RH),
@@ -208,6 +353,7 @@ object MonitoringPresentation {
             },
             buzzerMuted = muted,
             updatedAt = telemetry?.receivedAt ?: status.lastSeenAt ?: "--",
+            muteHint = MUTE_HINT,
         )
     }
 
@@ -216,16 +362,39 @@ object MonitoringPresentation {
      *
      * Samples without a gas reading are excluded from the gas statistics so an
      * uncalibrated device cannot drag the average toward zero.
+     *
+     * `window` only selects which of the three options is marked active; the
+     * samples themselves were already narrowed to that window by the query, so no
+     * second filter is applied here. Filtering twice would silently shrink a
+     * window the server had already honoured and make the sample count disagree
+     * with the range the user picked.
      */
-    fun trends(points: List<TelemetryPoint>): TrendsView {
-        val gasValues = points.mapNotNull { it.gasPpm }
+    fun trends(points: List<TelemetryPoint>, window: TrendWindow = TrendWindow.LAST_HOUR): TrendsView {
+        val gasReadings = points.mapNotNull { it.gasPpm }
         return TrendsView(
             sampleCount = points.size,
             hasData = points.isNotEmpty(),
-            temperature = summarize(points.map { it.temperatureC }),
-            humidity = summarize(points.map { it.humidityRh }),
-            gas = summarize(gasValues),
-            gasSampleCount = gasValues.size,
+            temperature = summarize(points) { it.temperatureC },
+            humidity = summarize(points) { it.humidityRh },
+            gas = summarize(points) { it.gasPpm },
+            gasSampleCount = gasReadings.size,
+            windowKey = window.name,
+            windowLabel = window.label,
+            windowOptions = trendWindowOptions(),
+            curveStatusText = CURVE_STATUS_TEXT,
+            curveMaskTitle = CURVE_MASK_TITLE,
+            curveMaskSub = CURVE_MASK_SUB,
+            curveAxisStart = CURVE_AXIS_START,
+            curveAxisEnd = CURVE_AXIS_END,
+            // The curve is not drawn yet on either host, so the placeholder is
+            // what the user sees and this stays false until a chart is wired in.
+            curveReady = false,
+            curveLegend = listOf(
+                CurveLegend("温度", Tone.DANGER),
+                CurveLegend("湿度", Tone.INFO),
+                CurveLegend("气体", Tone.MINT),
+            ),
+            footerHint = TRENDS_FOOTER_HINT,
             series = points.mapIndexed { index, point -> trendPoint(point, index) },
         )
     }
@@ -236,14 +405,37 @@ object MonitoringPresentation {
         key = point.sequence?.let { "${point.bootId ?: "boot"}-$it" } ?: "idx-$index",
         receivedAt = point.receivedAt,
         timeText = clockText(point.receivedAt),
-        temperatureText = decimal(point.temperatureC),
-        humidityText = decimal(point.humidityRh),
-        gasText = point.gasPpm?.let(::decimal) ?: "--",
+        temperatureText = reading(point.temperatureC),
+        humidityText = reading(point.humidityRh),
+        gasText = point.gasPpm?.let(::reading) ?: "--",
         localAlarm = point.localAlarm,
     )
 
-    /** Maps persisted alert events without recomputing their trigger evidence. */
-    fun alerts(events: List<AlertEvent>): AlertsView = AlertsView(events.size, events.map(::alert))
+    /**
+     * Maps persisted alert events without recomputing their trigger evidence.
+     *
+     * Filtering happens here rather than on the server because the backend's
+     * alerts query has no state parameter: the page is fetched once and the pills
+     * narrow it in place, which is also what keeps switching a pill from costing a
+     * request on a phone hotspot.
+     */
+    fun alerts(
+        events: List<AlertEvent>,
+        filter: AlertFilter = AlertFilter.ALL,
+    ): AlertsView {
+        val shown = if (filter == AlertFilter.ALL) {
+            events
+        } else {
+            events.filter { it.state.name == filter.key }
+        }
+        return AlertsView(
+            count = events.size,
+            visibleCount = shown.size,
+            filterKey = filter.key,
+            filters = alertFilterOptions(),
+            items = shown.map(::alert),
+        )
+    }
 
     /** Maps one persisted event to host-ready labels and formatted evidence. */
     fun alert(event: AlertEvent): AlertItemView {
@@ -307,6 +499,7 @@ object MonitoringPresentation {
             confirmed = confirmed,
             awaitingDevice = !confirmed,
             updatedAt = value.updatedAt ?: "--",
+            saveHint = SAVE_HINT,
         )
     }
 
@@ -366,6 +559,24 @@ object MonitoringPresentation {
         )
     }
 
+    /** The trends window options, in the order the selector shows them. */
+    fun trendWindowOptions(): List<SelectOption> =
+        TrendWindow.entries.map { SelectOption(key = it.name, label = it.label) }
+
+    /** The alert filter options, in the order the filter bar shows them. */
+    fun alertFilterOptions(): List<SelectOption> =
+        AlertFilter.entries.map { SelectOption(key = it.key, label = it.label) }
+
+    /**
+     * Both selector lists in one payload.
+     *
+     * This exists for the MiniApp, which must draw a selector before any view has
+     * been fetched and has no way to enumerate a Kotlin enum from WXML. Returning
+     * the same lists the views carry keeps one source for every option label.
+     */
+    fun selectors(): SelectorOptions =
+        SelectorOptions(windows = trendWindowOptions(), filters = alertFilterOptions())
+
     /**
      * Validates an outgoing threshold update against the contract ranges.
      *
@@ -396,9 +607,50 @@ object MonitoringPresentation {
         return if (time.isEmpty()) timestamp else time.take(8)
     }
 
-    private fun summarize(values: List<Double>): MetricSummary {
-        if (values.isEmpty()) return MetricSummary("--", "--", "--")
-        return MetricSummary(decimal(values.min()), decimal(values.average()), decimal(values.max()))
+    /**
+     * Summarises one metric over the samples that actually carry it.
+     *
+     * A sample without a reading — an uncalibrated gas estimate, or a value that
+     * arrived non-finite from a sensor fault — is skipped rather than counted as
+     * zero, so a gap lowers the sample count instead of the average.
+     */
+    private fun summarize(
+        points: List<TelemetryPoint>,
+        selector: (TelemetryPoint) -> Double?,
+    ): MetricSummary {
+        val measured = points.mapNotNull { point ->
+            selector(point)?.takeIf { it.isFinite() }?.let { value -> point to value }
+        }
+        if (measured.isEmpty()) return MetricSummary("--", "--", "--", "--")
+        val peak = measured.maxBy { it.second }
+        return MetricSummary(
+            minimum = reading(measured.minOf { it.second }),
+            average = reading(measured.sumOf { it.second } / measured.size),
+            maximum = reading(peak.second),
+            peakAt = clockText(peak.first.receivedAt),
+        )
+    }
+
+    /**
+     * Renders a temperature, humidity or gas reading as a whole number.
+     *
+     * The DHT11 resolves one degree and one percent, and the gas estimate one
+     * ppm, so a fractional reading would be precision the device cannot produce.
+     * This deliberately differs from the frozen baseline, which formats one
+     * decimal place: those decimals are formatting over integers, and printing
+     * `31.0` invites a reader to trust a digit that was never measured. The
+     * average is rounded for the same reason — it is displayed beside the two
+     * other figures, and a fractional average would put the digit straight back.
+     *
+     * Rounding is half-up via [roundToInt] rather than `kotlin.math.round`, which
+     * breaks ties toward the even neighbour and would show an average of 20 from
+     * 20 and 21 while the peak beside it read 21. Half-up is also the rule the
+     * device applies to a sub-unit threshold (`docs/device-protocol.md` §4.3), so
+     * both ends of the link round the same way.
+     */
+    private fun reading(value: Double): String {
+        if (!value.isFinite()) return "--"
+        return value.roundToInt().toString()
     }
 
     /** Scales a reading onto its alarm boundary, clamped to the 0-100 bar range. */
@@ -413,6 +665,4 @@ object MonitoringPresentation {
         val rounded = round(value * 10.0) / 10.0
         return if (rounded == rounded.toLong().toDouble()) rounded.toLong().toString() else rounded.toString()
     }
-
-    private fun Double.roundToInt(): Int = round(this).toInt()
 }

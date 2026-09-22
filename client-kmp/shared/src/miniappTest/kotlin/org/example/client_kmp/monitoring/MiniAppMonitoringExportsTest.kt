@@ -36,6 +36,44 @@ class MiniAppMonitoringExportsTest {
         assertEquals("function", jsTypeOf(LabMonitorExports::awaitCommandOutcome))
         assertEquals("function", jsTypeOf(LabMonitorExports::mute))
         assertEquals("function", jsTypeOf(LabMonitorExports::updateThresholds))
+        assertEquals("function", jsTypeOf(LabMonitorExports::selectors))
+    }
+
+    @Test
+    fun theSelectorLabelsReachTheHostFromTheSharedLayer() {
+        // The page draws the trends window selector before its first history
+        // response, so these labels cannot come from a fetched view.
+        val encoded = LabMonitorExports.selectors()
+
+        for (expected in listOf(
+            """"key":"LAST_HOUR","label":"近1小时"""",
+            """"key":"LAST_SIX_HOURS","label":"近6小时"""",
+            """"key":"LAST_DAY","label":"近24小时"""",
+            """"key":"all","label":"全部"""",
+            """"key":"fire_warning","label":"火情"""",
+            """"key":"suspect","label":"疑似"""",
+            """"key":"recovered","label":"已恢复"""",
+        )) {
+            assertTrue(encoded.contains(expected), "selectors() is missing $expected in $encoded")
+        }
+    }
+
+    @Test
+    fun anUnknownWindowKeyFallsBackInsteadOfThrowing() = runTest {
+        LabMonitorExports.configure("http://127.0.0.1:8080", "MCU001")
+
+        // The key arrives from a WXML data attribute, so a stale one must render
+        // the default window rather than break the page. Reaching the platform
+        // adapter is what proves the key resolved; the adapter then fails because
+        // the WeChat host binding does not exist here.
+        assertFailsWith<Throwable> { LabMonitorExports.trends("NOT_A_WINDOW") }
+    }
+
+    @Test
+    fun anUnknownFilterKeyFallsBackInsteadOfThrowing() = runTest {
+        LabMonitorExports.configure("http://127.0.0.1:8080", "MCU001")
+
+        assertFailsWith<Throwable> { LabMonitorExports.alerts("NOT_A_FILTER") }
     }
 
     @Test

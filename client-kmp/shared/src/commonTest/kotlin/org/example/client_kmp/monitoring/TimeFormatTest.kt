@@ -1,0 +1,67 @@
+package org.example.client_kmp.monitoring
+
+import kotlin.test.Test
+import kotlin.test.assertEquals
+
+/**
+ * Timestamp formatting and window arithmetic.
+ *
+ * The expected strings are calendar values, not re-derivations of the same
+ * algorithm: each one was computed independently, so a test cannot pass by
+ * agreeing with a bug in the formatter. The leap-day and pre-epoch cases are
+ * included because integer month arithmetic usually breaks on exactly those.
+ */
+class TimeFormatTest {
+
+    @Test
+    fun theEpochAndWholeSecondsRenderInTheContractForm() {
+        assertEquals("1970-01-01T00:00:00Z", Rfc3339.utcFromEpochMillis(0L))
+        assertEquals("1970-01-01T00:00:01Z", Rfc3339.utcFromEpochMillis(1_000L))
+        assertEquals("1970-01-02T00:00:00Z", Rfc3339.utcFromEpochMillis(86_400_000L))
+    }
+
+    @Test
+    fun aTimeInsideTheDayKeepsItsHourMinuteAndSecond() {
+        // 2009-02-13T23:31:30Z, a value with a non-trivial time component.
+        assertEquals("2009-02-13T23:31:30Z", Rfc3339.utcFromEpochMillis(1_234_567_890_123L))
+        assertEquals("2026-09-22T01:30:45Z", Rfc3339.utcFromEpochMillis(1_790_040_645_000L))
+    }
+
+    @Test
+    fun aLeapDayIsRenderedRatherThanRolledOver() {
+        // 2000 is a leap year; a formatter that assumes 365-day years lands on
+        // 01 March here, and one that forgets the 400-year rule lands on
+        // 28 February.
+        assertEquals("2000-02-29T00:00:00Z", Rfc3339.utcFromEpochMillis(951_782_400_000L))
+        // 2100 is not a leap year under the 400-year rule, so this is New Year.
+        assertEquals("2100-01-01T00:00:00Z", Rfc3339.utcFromEpochMillis(4_102_444_800_000L))
+    }
+
+    @Test
+    fun aTimeBeforeTheEpochFloorsRatherThanTruncatingTowardZero() {
+        // Truncating division would answer 1970-01-01T00:00:00Z for -1000 ms,
+        // which is a whole second later than the instant it denotes.
+        assertEquals("1969-12-31T23:59:59Z", Rfc3339.utcFromEpochMillis(-1_000L))
+        assertEquals("1969-12-31T23:59:59Z", Rfc3339.utcFromEpochMillis(-1L))
+    }
+
+    @Test
+    fun everyMonthBoundaryHasTheExpectedLength() {
+        // The first instant of four months of 2026, chosen to bracket the
+        // 31/30/31-day runs and the short February, so a wrong month length shows
+        // up as a wrong date rather than as a plausible neighbouring one.
+        assertEquals("2026-01-01T00:00:00Z", Rfc3339.utcFromEpochMillis(1_767_225_600_000L))
+        assertEquals("2026-03-01T00:00:00Z", Rfc3339.utcFromEpochMillis(1_772_323_200_000L))
+        assertEquals("2026-07-01T00:00:00Z", Rfc3339.utcFromEpochMillis(1_782_864_000_000L))
+        assertEquals("2026-12-01T00:00:00Z", Rfc3339.utcFromEpochMillis(1_796_083_200_000L))
+        assertEquals("2027-01-01T00:00:00Z", Rfc3339.utcFromEpochMillis(1_798_761_600_000L))
+    }
+
+    @Test
+    fun hoursBecomeTheMillisecondSpanTheQueryUses() {
+        assertEquals(3_600_000L, Rfc3339.hoursToMillis(1))
+        assertEquals(21_600_000L, Rfc3339.hoursToMillis(6))
+        assertEquals(86_400_000L, Rfc3339.hoursToMillis(24))
+        assertEquals(0L, Rfc3339.hoursToMillis(0))
+    }
+}

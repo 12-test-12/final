@@ -103,22 +103,58 @@ class MonitoringClientTest {
     // --- trends ------------------------------------------------------------------------
 
     @Test
-    fun trendsRequestAnExplicitAscendingOrderAndAClampedLimit() = runTest {
+    fun trendsAreBoundedByTheWindowAndTheLimitIsClamped() = runTest {
         val platform = FakePlatform { HttpResponse(200, """{"items":[]}""") }
         val client = MonitoringClient(platform, "http://test")
 
         client.loadTrends()
         client.loadTrends(limit = 5_000)
         client.loadTrends(limit = 0)
+        client.loadTrends(window = TrendWindow.LAST_DAY)
+        client.loadTrends(window = TrendWindow.LAST_SIX_HOURS)
 
+        // The window becomes absolute bounds against the pinned clock, and the
+        // page is requested newest-first so the rows that survive the limit are
+        // the ones nearest now. A bare `limit` would return the oldest rows in
+        // the range and present them as the trend of the whole window.
         assertEquals(
             listOf(
-                "http://test/api/v1/devices/MCU001/telemetry?limit=60&order=asc",
-                "http://test/api/v1/devices/MCU001/telemetry?limit=1000&order=asc",
-                "http://test/api/v1/devices/MCU001/telemetry?limit=1&order=asc",
+                "http://test/api/v1/devices/MCU001/telemetry" +
+                    "?from=2026-09-22T00:30:45Z&to=2026-09-22T01:30:45Z&limit=200&order=desc",
+                "http://test/api/v1/devices/MCU001/telemetry" +
+                    "?from=2026-09-22T00:30:45Z&to=2026-09-22T01:30:45Z&limit=1000&order=desc",
+                "http://test/api/v1/devices/MCU001/telemetry" +
+                    "?from=2026-09-22T00:30:45Z&to=2026-09-22T01:30:45Z&limit=1&order=desc",
+                "http://test/api/v1/devices/MCU001/telemetry" +
+                    "?from=2026-09-21T01:30:45Z&to=2026-09-22T01:30:45Z&limit=200&order=desc",
+                "http://test/api/v1/devices/MCU001/telemetry" +
+                    "?from=2026-09-21T19:30:45Z&to=2026-09-22T01:30:45Z&limit=200&order=desc",
             ),
             platform.requests.map { it.url },
         )
+    }
+
+    @Test
+    fun aNewestFirstPageIsReversedIntoAscendingOrder() = runTest {
+        val platform = FakePlatform {
+            HttpResponse(
+                200,
+                """{"items":[
+                    {"deviceId":"MCU001","receivedAt":"2026-09-21T10:00:02Z","temperatureC":22,"humidityRh":42,
+                     "gasAdcRaw":102,"gasAdcFiltered":100,"gasPpm":14,"localAlarm":false},
+                    {"deviceId":"MCU001","receivedAt":"2026-09-21T10:00:01Z","temperatureC":21,"humidityRh":41,
+                     "gasAdcRaw":101,"gasAdcFiltered":99,"gasPpm":13,"localAlarm":false}
+                ]}""",
+            )
+        }
+
+        val view = MonitoringClient(platform, "http://test").loadTrends()
+
+        // The query asks for the newest rows, so the presentation layer must put
+        // them back in event-time order before any statistic reads them.
+        assertEquals(listOf("10:00:01", "10:00:02"), view.series.map { it.timeText })
+        assertEquals("21", view.temperature.minimum)
+        assertEquals("22", view.temperature.maximum)
     }
 
     @Test
@@ -519,7 +555,11 @@ class MonitoringClientTest {
 
         MonitoringClient(platform, "http://test/").loadTrends()
 
-        assertEquals("http://test/api/v1/devices/MCU001/telemetry?limit=60&order=asc", platform.requests.single().url)
+        assertEquals(
+            "http://test/api/v1/devices/MCU001/telemetry" +
+                "?from=2026-09-22T00:30:45Z&to=2026-09-22T01:30:45Z&limit=200&order=desc",
+            platform.requests.single().url,
+        )
     }
 
     @Test
@@ -610,6 +650,13 @@ class MonitoringClientTest {
  * exact header a request carried.
  */
 private class FakePlatform(
+    /**
+     * Pinned so a window query produces exactly assertable `from`/`to` bounds
+     * instead of a timestamp that changes with the wall clock. Declared before
+     * the handler so the usual `FakePlatform { ... }` call still passes the
+     * lambda as the trailing argument.
+     */
+    private val now: Long = FIXED_NOW,
     private val handler: (HttpRequest) -> HttpResponse,
 ) : MonitoringPlatform {
     val requests = mutableListOf<HttpRequest>()
@@ -621,4 +668,13 @@ private class FakePlatform(
     }
 
     override fun newIdempotencyKey(): String = "key-${++key}"
+
+    override fun nowMillis(): Long = now
 }
+
+/**
+ * 2026-09-22T01:30:45Z. The exact bounds the window queries are asserted against
+ * are derived from it: 近1小时 starts at 2026-09-22T00:30:45Z, 近6小时 at
+ * 2026-09-21T19:30:45Z and 近24小时 at 2026-09-21T01:30:45Z.
+ */
+private const val FIXED_NOW = 1_790_040_645_000L

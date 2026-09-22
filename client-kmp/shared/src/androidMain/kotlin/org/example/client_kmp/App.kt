@@ -1,6 +1,7 @@
 package org.example.client_kmp
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,8 +24,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -42,15 +45,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
+import org.example.client_kmp.monitoring.AlertFilter
 import org.example.client_kmp.monitoring.AlertItemView
 import org.example.client_kmp.monitoring.AlertsView
+import org.example.client_kmp.monitoring.CurveLegend
 import org.example.client_kmp.monitoring.DashboardView
+import org.example.client_kmp.monitoring.MetricSummary
 import org.example.client_kmp.monitoring.MonitoringClient
+import org.example.client_kmp.monitoring.MonitoringPresentation
+import org.example.client_kmp.monitoring.SelectOption
 import org.example.client_kmp.monitoring.SettingsView
 import org.example.client_kmp.monitoring.ThresholdLimits
 import org.example.client_kmp.monitoring.ThresholdUpdate
 import org.example.client_kmp.monitoring.Tone
-import org.example.client_kmp.monitoring.TrendPointView
+import org.example.client_kmp.monitoring.TrendWindow
 import org.example.client_kmp.monitoring.TrendsView
 
 private val Background = Color(0xFF071310)
@@ -62,6 +71,11 @@ private val TextSecondary = Color(0xFF8FA8A2)
 private val Danger = Color(0xFFFB7185)
 private val Warning = Color(0xFFF5C96B)
 private val Info = Color(0xFF7DD3FC)
+
+// The one accent gradient the baseline reuses for every selected control and
+// primary button, with the on-colour it pairs with.
+private val ActiveStart = Color(0xFF45F0CB)
+private val ActiveEnd = Color(0xFF16B98B)
 
 /** Backend address reachable from the Android emulator; the host is `10.0.2.2`. */
 private const val EMULATOR_BASE_URL = "http://10.0.2.2:8080"
@@ -94,8 +108,18 @@ fun App() {
                         NavigationBarItem(
                             selected = tab == item,
                             onClick = { tab = item },
-                            icon = { Text(item.glyph, color = if (tab == item) Mint else TextSecondary) },
-                            label = { Text(item.title, color = if (tab == item) Mint else TextSecondary) },
+                            icon = { Text(item.glyph) },
+                            label = { Text(item.title) },
+                            // The baseline's selected tab is a filled accent pill
+                            // with the dark on-colour; the Material default would
+                            // tint it instead, which reads as a different palette.
+                            colors = NavigationBarItemDefaults.colors(
+                                indicatorColor = ActiveEnd,
+                                selectedIconColor = Background,
+                                selectedTextColor = Mint,
+                                unselectedIconColor = TextSecondary,
+                                unselectedTextColor = TextSecondary,
+                            ),
                         )
                     }
                 }
@@ -153,7 +177,10 @@ private fun DashboardScreen(client: MonitoringClient) {
     var view by remember { mutableStateOf<DashboardView?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    // The hint carries the shared tone so a rejection, a timeout and a device
+    // confirmation are visually distinct rather than three shades of one line.
     var commandHint by remember { mutableStateOf("") }
+    var commandTone by remember { mutableStateOf(Tone.WARNING) }
     val scope = rememberCoroutineScope()
 
     // Refreshes once per interval. Failures are captured into `error`, so a
@@ -175,9 +202,13 @@ private fun DashboardScreen(client: MonitoringClient) {
             runCatching {
                 val accepted = client.setMuted(!currentlyMuted)
                 commandHint = accepted.stateText
+                commandTone = accepted.tone
                 // The enqueue response is only an acknowledgement; wait for the device.
                 val settled = client.awaitCommandOutcome(accepted.requestId)
+                // Null means the device had not answered inside the polling budget.
+                // That is "still awaiting", so it must not read as a failure either.
                 commandHint = settled?.stateText ?: "等待设备确认"
+                commandTone = settled?.tone ?: Tone.WARNING
             }.onFailure { error = it.message }
             runCatching { client.loadDashboard() }.onSuccess { view = it }
             busy = false
@@ -221,8 +252,8 @@ private fun DashboardScreen(client: MonitoringClient) {
             SectionTitle("远程控制", "静音不影响检测与上报")
             GlassCard {
                 Text("蜂鸣器控制", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                Text("本地报警状态不会因静音而清除", color = TextSecondary, fontSize = 12.sp)
-                if (commandHint.isNotEmpty()) Hint(commandHint, Warning)
+                Text(data.muteHint, color = TextSecondary, fontSize = 12.sp)
+                if (commandHint.isNotEmpty()) Hint(commandHint, toneColor(commandTone))
                 Button(
                     enabled = !busy,
                     onClick = { toggleMute(data.buzzerMuted) },
@@ -249,14 +280,38 @@ private fun Meter(letter: String, label: String, value: String, unit: String, pe
     }
 }
 
+/**
+ * The trends page.
+ *
+ * The page's shape is the frozen baseline's: a window selector, three statistic
+ * cards, then the curve block. The block is a placeholder rather than a list of
+ * samples — a table of readings is not a trend curve, and showing one where the
+ * curve belongs would report an unfinished design goal as met. See
+ * [CurvePlaceholder].
+ */
 @Composable
 private fun TrendsScreen(client: MonitoringClient) {
     var view by remember { mutableStateOf<TrendsView?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) {
-        runCatching { client.loadTrends() }.onSuccess { view = it }.onFailure { error = it.message }
+    var window by remember { mutableStateOf(TrendWindow.LAST_HOUR) }
+    // The window is the effect key, so tapping a range cancels the in-flight fetch
+    // for the previous one instead of letting two responses race for one state.
+    LaunchedEffect(window) {
+        view = null
+        error = null
+        runCatching { client.loadTrends(window) }
+            .onSuccess { view = it }
+            .onFailure { error = it.message }
     }
     Page("历史趋势", "数据统计与曲线") {
+        // The selector renders before the data arrives: it is the control the user
+        // needs in order to fetch anything, so hiding it behind the result would
+        // leave a page with nothing to do while the first request is in flight.
+        Segmented(
+            options = view?.windowOptions ?: MonitoringPresentation.trendWindowOptions(),
+            activeKey = window.name,
+            onSelect = { key -> TrendWindow.entries.firstOrNull { it.name == key }?.let { window = it } },
+        )
         if (view == null && error == null) Hint("数据加载中…")
         error?.let { Hint(it, Danger) }
         view?.let { data ->
@@ -265,47 +320,140 @@ private fun TrendsScreen(client: MonitoringClient) {
             } else {
                 SectionTitle("统计摘要", "共 ${data.sampleCount} 条样本")
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SummaryCard("温度", "°C", data.temperature.minimum, data.temperature.average, data.temperature.maximum)
-                    SummaryCard("湿度", "%RH", data.humidity.minimum, data.humidity.average, data.humidity.maximum)
+                    SummaryCard("温度", "°C", data.temperature)
+                    SummaryCard("湿度", "%RH", data.humidity)
                     SummaryCard(
-                        "气体", "ppm",
-                        if (data.gasSampleCount > 0) data.gas.minimum else "--",
-                        if (data.gasSampleCount > 0) data.gas.average else "--",
-                        if (data.gasSampleCount > 0) data.gas.maximum else "--",
+                        "气体",
+                        "ppm",
+                        // A window with no calibrated gas reading has no gas
+                        // statistics at all, which is not the same as a measured
+                        // zero, so the card keeps its empty cells.
+                        if (data.gasSampleCount > 0) data.gas else EMPTY_SUMMARY,
                     )
                 }
                 if (data.gasSampleCount < data.sampleCount) {
                     Hint("${data.sampleCount - data.gasSampleCount} 条样本没有已校准气体读数，未计入气体统计")
                 }
-                SectionTitle("采样序列", "按时间升序")
-                GlassCard {
-                    data.series.takeLast(SERIES_PREVIEW).forEach { TrendRow(it) }
-                }
+                SectionTitle("曲线视图", data.curveStatusText)
+                CurvePlaceholder(data)
+                Hint(data.footerHint)
             }
         }
     }
 }
 
-private const val SERIES_PREVIEW = 12
+private val EMPTY_SUMMARY = MetricSummary("--", "--", "--", "--")
 
+/**
+ * Draws the curve frame both hosts must agree on.
+ *
+ * It is deliberately a frame: a legend, four grid lines, a masked centre note and
+ * the two axis labels, with no plotted geometry. `curveReady` is false in the
+ * shared model, so this is the honest unfinished state rather than a finished
+ * chart with no data. Wiring a real chart replaces the mask and flips the flag.
+ */
 @Composable
-private fun TrendRow(point: TrendPointView) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(point.timeText, color = TextSecondary, fontSize = 12.sp)
-        Text(
-            "${point.temperatureText}°C   ${point.humidityText}%   ${point.gasText}ppm",
-            color = if (point.localAlarm) Danger else TextSecondary,
-            fontSize = 12.sp,
-        )
+private fun CurvePlaceholder(data: TrendsView) {
+    GlassCard {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+            data.curveLegend.forEach { LegendDot(it) }
+        }
+        Box(
+            Modifier.fillMaxWidth().padding(top = 14.dp).height(160.dp)
+                .background(Color.Black.copy(alpha = 0.18f), RoundedCornerShape(14.dp)),
+        ) {
+            // `justifyContent: space-between` over four lines, as in the baseline:
+            // the frame reads as a grid without any axis values to label it with.
+            Column(
+                Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.SpaceBetween,
+            ) {
+                repeat(4) { Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.05f))) }
+            }
+            Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(data.curveMaskTitle, color = TextSecondary, fontSize = 14.sp)
+                Text(data.curveMaskSub, color = TextSecondary, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(data.curveAxisStart, color = TextSecondary, fontSize = 11.sp)
+            Text(data.curveAxisEnd, color = TextSecondary, fontSize = 11.sp)
+        }
     }
 }
 
 @Composable
-private fun SummaryCard(name: String, unit: String, min: String, avg: String, max: String) {
-    Column(Modifier.width(180.dp).background(Surface, RoundedCornerShape(18.dp)).padding(16.dp)) {
-        Text("$name  $unit", color = TextSecondary)
-        Text(avg, color = TextPrimary, fontSize = 32.sp, fontWeight = FontWeight.SemiBold)
-        Text("最低 $min    最高 $max", color = TextSecondary, fontSize = 12.sp)
+private fun LegendDot(item: CurveLegend) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(8.dp).background(toneColor(item.tone), CircleShape))
+        Text(item.label, color = TextSecondary, fontSize = 12.sp, modifier = Modifier.padding(start = 5.dp))
+    }
+}
+
+/**
+ * One segmented selector row.
+ *
+ * The trends windows and the alert filters are both lists of [SelectOption], so
+ * one control renders both and the baseline's "the active option is a filled mint
+ * pill" behaviour appears twice without being written twice. Which option is
+ * active is decided here by comparing [activeKey], because the option list itself
+ * deliberately carries no selected state.
+ */
+@Composable
+private fun Segmented(options: List<SelectOption>, activeKey: String, onSelect: (String) -> Unit) {
+    val shape = RoundedCornerShape(999.dp)
+    Row(
+        Modifier.fillMaxWidth().padding(top = 8.dp)
+            .background(Surface, shape)
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        options.forEach { option ->
+            val selected = option.key == activeKey
+            val base = Modifier
+                .weight(1f)
+                // Tapping the active option is a no-op, which keeps a stray tap
+                // from refetching the range already on screen.
+                .clickable(enabled = !selected) { onSelect(option.key) }
+                .padding(vertical = 9.dp)
+            val styled = if (selected) {
+                base.background(Brush.linearGradient(listOf(ActiveStart, ActiveEnd)), shape)
+            } else {
+                base
+            }
+            Box(styled, contentAlignment = Alignment.Center) {
+                Text(
+                    option.label,
+                    color = if (selected) Background else TextSecondary,
+                    fontSize = 13.sp,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SummaryCard(name: String, unit: String, summary: MetricSummary) {
+    Column(Modifier.width(190.dp).background(Surface, RoundedCornerShape(18.dp)).padding(16.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(name, color = TextSecondary, fontSize = 13.sp)
+            Text(unit, color = TextSecondary, fontSize = 11.sp)
+        }
+        Text(summary.average, color = TextPrimary, fontSize = 32.sp, fontWeight = FontWeight.SemiBold)
+        Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            Column {
+                Text("最低", color = TextSecondary, fontSize = 11.sp)
+                Text(summary.minimum, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            }
+            Column {
+                Text("最高", color = TextSecondary, fontSize = 11.sp)
+                Text(summary.maximum, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+        // The peak time is what a min/avg/max triple cannot say on its own: when
+        // the worst reading happened.
+        Text("峰值 ${summary.peakAt}", color = TextSecondary, fontSize = 11.sp, modifier = Modifier.padding(top = 10.dp))
     }
 }
 
@@ -313,32 +461,84 @@ private fun SummaryCard(name: String, unit: String, min: String, avg: String, ma
 private fun AlertsScreen(client: MonitoringClient) {
     var view by remember { mutableStateOf<AlertsView?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) {
-        runCatching { client.loadAlerts() }.onSuccess { view = it }.onFailure { error = it.message }
+    var filter by remember { mutableStateOf(AlertFilter.ALL) }
+    // Switching a pill refetches rather than re-filtering what is already on
+    // screen. The filtering rule lives in the shared layer, and re-deriving it
+    // here would be a second implementation of the same rule — the kind of
+    // duplication that lets Android and the MiniApp drift.
+    LaunchedEffect(filter) {
+        error = null
+        runCatching { client.loadAlerts(filter = filter) }
+            .onSuccess { view = it }
+            .onFailure { error = it.message }
     }
-    Page("告警记录", "复合预警事件与触发证据") {
+    Page("告警记录", "早期火情预警事件") {
+        Segmented(
+            options = view?.filters ?: MonitoringPresentation.alertFilterOptions(),
+            activeKey = filter.key,
+            onSelect = { key -> AlertFilter.entries.firstOrNull { it.key == key }?.let { filter = it } },
+        )
         if (view == null && error == null) Hint("数据加载中…")
         error?.let { Hint(it, Danger) }
         view?.let { data ->
-            if (data.items.isEmpty()) Hint("暂无告警记录")
+            if (data.visibleCount == 0) Hint("🛡  该分类下暂无告警记录")
             data.items.forEach { AlertCard(it) }
         }
     }
 }
 
+/**
+ * One alert, laid out as the frozen baseline lays it out: a state header, a
+ * bordered evidence panel of four fields, then the recovery line.
+ *
+ * The evidence labels name the quantity this backend actually returns. The
+ * baseline's first cell is a gas rise in ppm because its contract exposes that
+ * field; this client's contract exposes an ADC-code rise, so the label says ADC
+ * rather than borrowing a unit the number is not in.
+ */
 @Composable
 private fun AlertCard(item: AlertItemView) {
     GlassCard {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Pill(item.stateText, toneColor(item.tone))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(8.dp).background(toneColor(item.tone), CircleShape))
+                Text(
+                    item.stateText,
+                    color = toneColor(item.tone),
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(start = 8.dp)
+                        .background(toneColor(item.tone).copy(alpha = 0.14f), CircleShape)
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+            }
             Text(item.startedAt, color = TextSecondary, fontSize = 11.sp)
         }
-        Text("触发证据", color = TextSecondary, fontSize = 12.sp, modifier = Modifier.padding(top = 14.dp))
-        KeyValue("气体 ADC 上升", "${item.gasAdcRiseText}（阈值 ${item.gasAdcRiseThresholdText}）", TextPrimary)
-        KeyValue("温升速率", "${item.temperatureRateText}（阈值 ${item.temperatureRateThresholdText}）", TextPrimary)
-        KeyValue("样本数", item.sampleCountText, TextPrimary)
-        KeyValue("窗口", "${item.windowSecondsText} 秒", TextPrimary)
-        KeyValue("结束时间", item.endedAt, TextPrimary)
+        Column(
+            Modifier.fillMaxWidth().padding(top = 14.dp)
+                .background(Color.Black.copy(alpha = 0.18f), RoundedCornerShape(14.dp))
+                .padding(14.dp),
+        ) {
+            Text("触发证据", color = TextSecondary, fontSize = 12.sp)
+            Row(Modifier.fillMaxWidth().padding(top = 10.dp)) {
+                EvidenceCell("气体 ADC 上升", item.gasAdcRiseText, Modifier.weight(1f))
+                EvidenceCell("触发阈值", item.gasAdcRiseThresholdText, Modifier.weight(1f))
+            }
+            Row(Modifier.fillMaxWidth().padding(top = 10.dp)) {
+                EvidenceCell("温升速率", item.temperatureRateText, Modifier.weight(1f))
+                EvidenceCell("样本数", item.sampleCountText, Modifier.weight(1f))
+            }
+        }
+        if (!item.active) {
+            Text("已恢复 ${item.endedAt}", color = TextSecondary, fontSize = 11.sp, modifier = Modifier.padding(top = 12.dp))
+        }
+    }
+}
+
+@Composable
+private fun EvidenceCell(label: String, value: String, modifier: Modifier) {
+    Column(modifier) {
+        Text(label, color = TextSecondary, fontSize = 11.sp)
+        Text(value, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 2.dp))
     }
 }
 
@@ -346,11 +546,16 @@ private fun AlertCard(item: AlertItemView) {
 private fun SettingsScreen(client: MonitoringClient) {
     var view by remember { mutableStateOf<SettingsView?>(null) }
     var temperature by remember { mutableStateOf(30f) }
+    // The humidity limit is not editable here, matching the frozen baseline's
+    // settings page, which offers temperature and gas only. The value is still
+    // sent: the contract requires all three fields on every update, so dropping it
+    // would make every save a rejection.
     var humidity by remember { mutableStateOf(80f) }
     var gas by remember { mutableStateOf(20f) }
     var error by remember { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
     var commandHint by remember { mutableStateOf("") }
+    var commandTone by remember { mutableStateOf(Tone.WARNING) }
     val scope = rememberCoroutineScope()
 
     suspend fun refresh() {
@@ -375,8 +580,11 @@ private fun SettingsScreen(client: MonitoringClient) {
                     ThresholdUpdate(temperature.toDouble(), humidity.toDouble(), gas.toDouble()),
                 )
                 commandHint = accepted.stateText
+                commandTone = accepted.tone
                 val settled = client.awaitCommandOutcome(accepted.requestId)
+                // Null is "the device has not answered yet", not a failure.
                 commandHint = settled?.stateText ?: "等待设备确认"
+                commandTone = settled?.tone ?: Tone.WARNING
             }.onFailure { error = it.message }
             refresh()
             saving = false
@@ -387,10 +595,10 @@ private fun SettingsScreen(client: MonitoringClient) {
         if (view == null && error == null) Hint("数据加载中…")
         error?.let { Hint(it, Danger) }
         view?.let { data ->
+            SectionTitle("报警规则", "修改后需下发设备")
             // Ranges come from the shared contract constants, so a slider can
             // never offer a value the backend would reject with 422.
             ThresholdSlider("温度上限", temperature, "°C", temperatureRange()) { temperature = it }
-            ThresholdSlider("湿度上限", humidity, "%RH", humidityRange()) { humidity = it }
             ThresholdSlider("气体浓度上限", gas, "ppm", gasRange()) { gas = it }
             SectionTitle("设备确认", "202 仅表示命令已接受")
             GlassCard {
@@ -399,26 +607,57 @@ private fun SettingsScreen(client: MonitoringClient) {
                 KeyValue("设备确认版本", data.confirmedVersion?.toString() ?: "--", TextPrimary)
                 KeyValue("更新时间", data.updatedAt, TextPrimary)
             }
-            if (commandHint.isNotEmpty()) Hint(commandHint, Warning)
+            if (commandHint.isNotEmpty()) Hint(commandHint, toneColor(commandTone))
             Button(
                 enabled = !saving,
                 onClick = { save() },
                 colors = ButtonDefaults.buttonColors(containerColor = Mint, contentColor = Background),
                 modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
             ) { Text(if (saving) "正在下发…" else "保存并下发到设备") }
+            Hint(data.saveHint)
         }
     }
 }
 
+/**
+ * One threshold control.
+ *
+ * The slider is stepped so it only produces whole units. The device resolves a
+ * whole degree and a whole ppm and rounds anything finer (`docs/device-protocol.md`
+ * §4.3), so a continuous slider would let an operator set 30.5, show 30.5 and get
+ * a device enforcing 31 — a control whose displayed value is not the value that
+ * takes effect. The frozen baseline's temperature slider steps by 0.5 and is the
+ * one place this client deliberately does not follow it.
+ */
 @Composable
-private fun ThresholdSlider(label: String, value: Float, unit: String, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
+private fun ThresholdSlider(
+    label: String,
+    value: Float,
+    unit: String,
+    range: ClosedFloatingPointRange<Float>,
+    onChange: (Float) -> Unit,
+) {
     GlassCard {
         Text(label, color = TextSecondary)
-        Text("${value.toInt()} $unit", color = TextPrimary, fontSize = 34.sp, fontWeight = FontWeight.SemiBold)
-        Slider(value = value, onValueChange = onChange, valueRange = range)
+        Text("${value.roundToInt()} $unit", color = TextPrimary, fontSize = 34.sp, fontWeight = FontWeight.SemiBold)
+        Slider(
+            value = value,
+            onValueChange = { onChange(it.roundToInt().toFloat()) },
+            valueRange = range,
+            steps = ((range.endInclusive - range.start).roundToInt() - 1).coerceAtLeast(0),
+            // The baseline paints the slider with the accent, not the Material
+            // default, which would otherwise be the only purple on the screen.
+            colors = SliderDefaults.colors(
+                thumbColor = Mint,
+                activeTrackColor = Mint,
+                inactiveTrackColor = Color.White.copy(alpha = 0.12f),
+                activeTickColor = Background,
+                inactiveTickColor = TextSecondary,
+            ),
+        )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(range.start.toInt().toString(), color = TextSecondary, fontSize = 11.sp)
-            Text(range.endInclusive.toInt().toString(), color = TextSecondary, fontSize = 11.sp)
+            Text(range.start.roundToInt().toString(), color = TextSecondary, fontSize = 11.sp)
+            Text(range.endInclusive.roundToInt().toString(), color = TextSecondary, fontSize = 11.sp)
         }
     }
 }
@@ -446,9 +685,6 @@ private fun toneColor(tone: String): Color = when (tone) {
 
 private fun temperatureRange() =
     ThresholdLimits.TEMPERATURE_MIN_C.toFloat()..ThresholdLimits.TEMPERATURE_MAX_C.toFloat()
-
-private fun humidityRange() =
-    ThresholdLimits.HUMIDITY_MIN_RH.toFloat()..ThresholdLimits.HUMIDITY_MAX_RH.toFloat()
 
 private fun gasRange() =
     ThresholdLimits.GAS_MIN_PPM.toFloat()..ThresholdLimits.GAS_MAX_PPM.toFloat()

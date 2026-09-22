@@ -32,4 +32,6 @@ class AndroidMonitoringPlatform : MonitoringPlatform {
     }
 
     override fun newIdempotencyKey(): String = UUID.randomUUID().toString()
+
+    override fun nowMillis(): Long = System.currentTimeMillis()
 }
