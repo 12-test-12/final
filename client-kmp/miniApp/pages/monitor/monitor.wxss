@@ -1,23 +1,89 @@
-/* Colour comes from the shared tone token classes in app.wxss. */
-.risk-row { margin:18rpx 0 8rpx; }
-.risk-text { font-size:40rpx; font-weight:600; color:var(--mint); }
-.meters { display:flex; gap:14rpx; }
-.meter { flex:1; min-width:0; padding:24rpx 18rpx; border-radius:24rpx; background:linear-gradient(155deg,var(--surface-2),var(--surface)); border:1rpx solid var(--line); }
-.meter-label { color:var(--muted); font-size:22rpx; }
-.meter-value { margin:12rpx 0; font-size:42rpx; font-weight:600; }
-.meter-value text { margin-left:5rpx; color:var(--muted); font-size:18rpx; font-weight:400; }
-.track { height:7rpx; overflow:hidden; border-radius:99rpx; background:rgba(255,255,255,.08); }
-.fill { height:100%; border-radius:99rpx; }
-.temp { background:#ffa183; }.hum { background:#8ed6ff; }.gas { background:var(--mint); }
-.device-name { font-size:36rpx; font-weight:600; margin-bottom:16rpx; }
-.kv { display:flex; justify-content:space-between; padding:15rpx 0; border-bottom:1rpx solid rgba(255,255,255,.05); color:var(--muted); font-size:24rpx; }
-.kv text:last-child { color:var(--text); font-weight:600; text-align:right; }
-.control-title { font-size:30rpx; font-weight:600; }
-.stats { white-space:nowrap; margin:0 -28rpx; width:750rpx; }
-.stats-inner { display:flex; padding:0 28rpx; }
-.stat { display:inline-flex; flex-direction:column; width:300rpx; margin-right:16rpx; }
-.stat-main { display:block; font-size:58rpx; font-weight:600; margin:10rpx 0; }
-.trend-row { display:flex; justify-content:space-between; padding:13rpx 0; color:var(--muted); font-size:20rpx; border-bottom:1rpx solid rgba(255,255,255,.05); }
-.alert .evidence { margin-top:18rpx; padding:12rpx 18rpx; border-radius:20rpx; background:rgba(0,0,0,.18); }
-.set-value { font-size:70rpx; font-weight:600; margin:10rpx 0; }
-.set-value text { color:var(--muted); font-size:22rpx; }
+/*
+  Page chrome for the four tabs. Colour comes from the tone token classes and
+  custom properties in app.wxss; this file only arranges blocks and sets the
+  spacing and type scale the frozen baseline uses.
+*/
+.risk-row { margin: 18rpx 0 8rpx; }
+.risk-text { font-size: 40rpx; font-weight: 600; color: var(--mint); }
+
+.meters { display: flex; gap: 16rpx; margin: 0 28rpx; }
+.meter { flex: 1; min-width: 0; padding: 26rpx 22rpx 24rpx; border-radius: var(--r-md); background: linear-gradient(160deg, var(--glass-2), var(--glass)); border: 1rpx solid var(--glass-line); }
+.meter-label { color: var(--muted); font-size: 23rpx; }
+.meter-value { margin: 16rpx 0 0; font-size: 50rpx; font-weight: 600; letter-spacing: -1rpx; }
+.meter-value text { margin-left: 6rpx; color: var(--text-3); font-size: 20rpx; font-weight: 400; }
+.track { height: 8rpx; overflow: hidden; border-radius: 999rpx; background: rgba(255, 255, 255, .08); margin-top: 18rpx; }
+.fill { height: 100%; border-radius: 999rpx; transition: width .6s ease; }
+.temp { background: linear-gradient(90deg, #ffb27d, #fb7185); }
+.hum { background: linear-gradient(90deg, #8ed6ff, #a5b4fc); }
+.gas { background: linear-gradient(90deg, #45f0cb, #f5c96b); }
+
+.device-name { font-size: 36rpx; font-weight: 600; letter-spacing: 2rpx; margin-bottom: 16rpx; }
+.control-title { font-size: 30rpx; font-weight: 600; }
+
+/* Segmented selector, shared by the trends windows and the alert filters. The
+   active item is a filled accent pill, as in the baseline. */
+.seg {
+  display: flex;
+  margin: 16rpx 28rpx 0;
+  padding: 8rpx;
+  border-radius: 999rpx;
+  background: linear-gradient(160deg, var(--glass-2), var(--glass));
+  border: 1rpx solid var(--glass-line);
+}
+.seg-item { flex: 1; padding: 18rpx 0; text-align: center; font-size: 26rpx; color: var(--muted); border-radius: 999rpx; transition: all .24s ease; }
+.seg-active { color: var(--on-accent); font-weight: 600; background: linear-gradient(135deg, var(--accent-start), var(--accent-deep)); box-shadow: 0 12rpx 26rpx rgba(22, 185, 139, .28); }
+
+/* Statistics: a full-bleed scroll row whose first card lines up with the card
+   inset, so the row reads as part of the same column as everything else. */
+.stats { white-space: nowrap; width: 750rpx; margin-top: 4rpx; }
+.stats-inner { display: inline-flex; padding: 4rpx 28rpx 8rpx; }
+.stat.card { display: inline-flex; flex-direction: column; width: 400rpx; margin: 0 20rpx 0 0; }
+.stat.card:last-child { margin-right: 28rpx; }
+.stat-main { display: block; margin-top: 14rpx; font-size: 64rpx; font-weight: 600; line-height: 1.05; letter-spacing: -2rpx; }
+.stat-meta { display: flex; margin-top: 24rpx; }
+.stat-meta-item { flex: 1; }
+.stat-meta-item + .stat-meta-item { border-left: 1rpx solid rgba(255, 255, 255, .07); padding-left: 22rpx; }
+.stat-meta-value { display: block; font-size: 30rpx; font-weight: 600; }
+.stat-extreme { display: block; margin-top: 18rpx; font-size: 20rpx; color: var(--text-3); }
+
+/* The curve frame. It is a placeholder: a legend, four grid lines, a masked note
+   and two axis labels, with no plotted geometry. See `curveReady` in the shared
+   model — this is the unfinished state, not a chart without data. */
+.legend { display: flex; align-items: center; }
+.legend-item { display: flex; align-items: center; margin-right: 30rpx; font-size: 22rpx; color: var(--muted); }
+.legend-dot { width: 16rpx; height: 16rpx; border-radius: 50%; margin-right: 10rpx; }
+.dot-mint { background: var(--mint); }
+.dot-warning { background: var(--warning); }
+.dot-danger { background: var(--danger); }
+.dot-info { background: var(--info); }
+.chart-body {
+  position: relative;
+  height: 360rpx;
+  padding: 26rpx 0;
+  margin-top: 20rpx;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  border-radius: var(--r-md);
+  background: rgba(0, 0, 0, .18);
+  border: 1rpx solid rgba(255, 255, 255, .05);
+  overflow: hidden;
+}
+.grid-line { height: 1rpx; margin: 0 22rpx; background: rgba(255, 255, 255, .05); }
+.chart-mask { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); text-align: center; }
+.chart-mask-title { font-size: 26rpx; color: var(--muted); }
+.chart-mask-sub { margin-top: 8rpx; font-size: 20rpx; color: var(--text-3); }
+.chart-xaxis { display: flex; justify-content: space-between; margin-top: 16rpx; font-size: 20rpx; color: var(--text-3); }
+
+/* Alerts: a state header, the evidence panel, then the recovery line. */
+.alert-state { justify-content: flex-start; }
+.alert-dot { width: 16rpx; height: 16rpx; border-radius: 50%; margin-right: 16rpx; }
+.evidence { margin-top: 24rpx; padding: 24rpx 26rpx 20rpx; border-radius: var(--r-md); background: rgba(0, 0, 0, .18); border: 1rpx solid rgba(255, 255, 255, .05); }
+.evidence-grid { display: flex; flex-wrap: wrap; margin-top: 18rpx; }
+.evidence-cell { width: 50%; padding: 10rpx 0; }
+.evidence-value { display: block; margin-top: 4rpx; font-size: 30rpx; font-weight: 600; }
+.alert-foot { margin-top: 22rpx; padding-top: 20rpx; border-top: 1rpx solid rgba(255, 255, 255, .05); font-size: 21rpx; color: var(--text-3); }
+
+.set-value { font-size: 78rpx; font-weight: 600; letter-spacing: -2rpx; margin: 12rpx 0 2rpx; }
+.set-value text { color: var(--text-3); font-size: 24rpx; font-weight: 400; margin-left: 10rpx; }
+.range-hint { font-size: 21rpx; color: var(--text-3); margin-top: 2rpx; }

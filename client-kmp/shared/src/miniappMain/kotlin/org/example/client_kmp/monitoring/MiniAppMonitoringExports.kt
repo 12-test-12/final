@@ -33,6 +33,12 @@ private class MiniAppMonitoringPlatform : MonitoringPlatform {
      */
     override fun newIdempotencyKey(): String = "miniapp-${Date.now().toLong()}-${++sequence}"
 
+    /**
+     * The WeChat runtime's clock. `Date.now()` is the only epoch source the base
+     * library guarantees, so it is what the shared window bound is built from.
+     */
+    override fun nowMillis(): Long = Date.now().toLong()
+
     private companion object {
         const val REQUEST_TIMEOUT_MS = 8_000
     }
@@ -68,13 +74,39 @@ object LabMonitorExports {
 
     suspend fun dashboard(): String = client.encodeDashboard(client.loadDashboard())
 
-    suspend fun trends(limit: Int = MonitoringClient.DEFAULT_SAMPLE_LIMIT): String =
-        client.encodeTrends(client.loadTrends(limit))
+    /**
+     * Loads the trends view for one window.
+     *
+     * [window] is a [TrendWindow] key (`LAST_HOUR`, `LAST_SIX_HOURS`,
+     * `LAST_DAY`). An unrecognised key falls back to the shortest window instead
+     * of throwing: the key arrives from a WXML `data-` attribute, and a stale one
+     * should render the default range rather than blank the page.
+     */
+    suspend fun trends(
+        window: String = DEFAULT_WINDOW_KEY,
+        limit: Int = MonitoringClient.DEFAULT_TREND_LIMIT,
+    ): String = client.encodeTrends(client.loadTrends(windowFromKey(window), limit))
 
-    suspend fun alerts(limit: Int = MonitoringClient.DEFAULT_ALERT_LIMIT): String =
-        client.encodeAlerts(client.loadAlerts(limit))
+    /**
+     * Loads the alert page narrowed by [filter], an [AlertFilter] key
+     * (`all` selects everything the backend returned).
+     */
+    suspend fun alerts(
+        filter: String = AlertFilter.ALL.key,
+        limit: Int = MonitoringClient.DEFAULT_ALERT_LIMIT,
+    ): String = client.encodeAlerts(client.loadAlerts(limit, filterFromKey(filter)))
 
     suspend fun settings(): String = client.encodeSettings(client.loadSettings())
+
+    /**
+     * The selector option lists, as JSON.
+     *
+     * The page draws the trends window selector before it has fetched any history,
+     * and WXML cannot enumerate a Kotlin enum, so the labels have to arrive from
+     * here. Exposing them keeps the selector copy in the shared layer instead of
+     * restating it in the page script where it could drift from Android's.
+     */
+    fun selectors(): String = client.encodeSelectors(MonitoringPresentation.selectors())
 
     /** Reads the recorded outcome of an enqueued command; the only way to see a device acknowledgement. */
     suspend fun commandStatus(requestId: String): String =
@@ -104,4 +136,11 @@ object LabMonitorExports {
 
     private const val DEFAULT_BASE_URL = "http://127.0.0.1:8080"
     private const val DEFAULT_DEVICE_ID = "MCU001"
+    private const val DEFAULT_WINDOW_KEY = "LAST_HOUR"
+
+    private fun windowFromKey(key: String): TrendWindow =
+        TrendWindow.entries.firstOrNull { it.name == key } ?: TrendWindow.LAST_HOUR
+
+    private fun filterFromKey(key: String): AlertFilter =
+        AlertFilter.entries.firstOrNull { it.key == key } ?: AlertFilter.ALL
 }

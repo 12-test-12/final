@@ -38,7 +38,8 @@
 | 文件 | 职责 |
 | --- | --- |
 | `Models.kt` | 契约模型：`DeviceStatus`、`TelemetryPoint`、`AlertEvent`、`Thresholds`、`CommandStatus`、错误信封 |
-| `Transport.kt` | `HttpRequest` / `HttpResponse` / `MonitoringPlatform` 平台边界、`MonitoringException` |
+| `Transport.kt` | `HttpRequest` / `HttpResponse` / `MonitoringPlatform` 平台边界（含 `nowMillis()` 时钟）、`MonitoringException` |
+| `TimeFormat.kt` | 纪元毫秒 → RFC 3339 UTC 的格式化与时间窗的毫秒换算。不引入 `kotlinx-datetime`：共享层不应为一次区间查询拉进一个平台日期层，而这段整数日历算法可以完全单测 |
 | `Presentation.kt` | 仪表盘派生、趋势统计、告警展示模型、阈值校验、命令生命周期措辞、`Tone` 颜色 token |
 | `MonitoringClient.kt` | 端点路径、序列化、幂等键、错误信封映射、202 控制闭环轮询 |
 
@@ -82,9 +83,10 @@ bundle.org.example.client_kmp.monitoring.LabMonitorExports
 | 成员 | 说明 |
 | --- | --- |
 | `configure(baseUrl, deviceId)` | 同步，设置后端地址；须在任何数据调用前执行 |
+| `selectors()` | 同步、无 I/O。返回两个选择器的选项表（`windows` / `filters`），供页面在首次取数之前画出趋势时间窗与告警筛选 |
 | `dashboard()` | 返回 DashboardView JSON |
-| `trends(limit)` | 返回 TrendsView JSON（按时间升序） |
-| `alerts(limit)` | 返回 AlertsView JSON |
+| `trends(window, limit)` | 返回 TrendsView JSON（按时间升序）。`window` 为 `LAST_HOUR` / `LAST_SIX_HOURS` / `LAST_DAY`，驱动 `from`/`to` 绝对边界；未知值回落到默认窗口 |
+| `alerts(filter, limit)` | 返回 AlertsView JSON。`filter` 为 `all` / `fire_warning` / `suspect` / `recovered`；未知值回落到 `all` |
 | `settings()` | 返回 SettingsView JSON |
 | `commandStatus(requestId)` | 读取命令生命周期 |
 | `awaitCommandOutcome(requestId)` | 等待设备确认；超时返回 `null`（未确认，非失败） |
@@ -198,12 +200,23 @@ cd client-kmp
 # MiniApp 运行时不得携带 Compose/Skiko
 ./gradlew --no-configuration-cache :shared:checkMiniAppHostBoundary
 
+# 微信工程自包含 + 入口文件存在 + 「只有设备 ACK 才算成功」的闸门仍在（root 工程任务）
+./gradlew --no-configuration-cache prepareMiniAppHost
+
 # 覆盖率报告（Kover）；koverVerify 对共享逻辑执行 80% 行覆盖下限
 ./gradlew --no-configuration-cache :shared:koverXmlReport :shared:koverVerify
 
-# 全量
+# Android 调试包
+./gradlew --no-configuration-cache :androidApp:assembleDebug
+
+# 全量（含上面的自包含检查）
 ./gradlew --no-configuration-cache check
 ```
+
+> 任务名注意：本仓库**没有** `:shared:jsNodeTest` 任务。JS/Node 侧的测试任务名是
+> `:shared:miniappTest`（其执行器是 `:shared:miniappNodeTest`）。另外
+> `checkMiniAppHostBoundary` 是插件任务，而更严格的「微信工程自包含 + toast 闸门」
+> 检查是 root 工程的 `checkMiniAppHostSelfContained`，由 `prepareMiniAppHost` 触发。
 
 覆盖率口径：仅统计 `org.example.client_kmp.monitoring`（两端共同的业务规则），
 排除编译器生成的嵌套类。Compose 页面、WXML Host 与生成 bundle 属于 Host 代码，
@@ -213,19 +226,29 @@ cd client-kmp
 
 | 项目 | 结果 |
 | --- | --- |
-| `:shared:testAndroidHostTest` | 85 tests，0 failures |
-| `:shared:miniappTest`（Node/JS） | 83 tests，0 failures |
-| `:shared:iosSimulatorArm64Test` | 77 tests，0 failures（仅共享逻辑） |
-| 共享业务逻辑行覆盖率 | 100%（405 行），方法/类 100% |
+| `:shared:testAndroidHostTest` | 106 tests，0 failures |
+| `:shared:miniappTest`（Node/JS） | 107 tests，0 failures |
+| `:shared:koverVerify` | PASS（80% 行覆盖下限） |
+| 共享业务逻辑行覆盖率 | **527 / 529 行（99.6%）**；本轮新增/修改的类型均为 100% |
 | `:shared:checkMiniAppHostBoundary` | PASS |
-| `:androidApp:assembleDebug` | PASS，产出 debug APK |
+| `prepareMiniAppHost` + `checkMiniAppHostSelfContained` | PASS |
+| `:androidApp:assembleDebug` | PASS，产出 debug APK（约 12.6 MB） |
 | `./gradlew check` | PASS |
+
+覆盖率逐类（Kover XML）：`Rfc3339` 39/39、`MonitoringPresentation` 188/188、`TrendWindow`、
+`AlertFilter`、`SelectOption`、`SelectorOptions`、`CurveLegend`、`TrendsView`、`MetricSummary`、
+`SettingsView`、`DashboardView` 均 100%。唯二未覆盖行在 `MonitoringClient`（81/83），是既有的
+分支，与本轮改动无关。
 
 Android 平台测试对真实 loopback HTTP 服务发起请求，覆盖 `HttpURLConnection` 的
 `inputStream` / `errorStream` 分支与请求体写出，不使用 mock 替代网络边界。
 
-**未验证**：Android 真机/模拟器上的 UI 交互、微信开发者工具中的实际渲染与真机网络联通。
-本轮只证明编译、构建、共享逻辑测试和 JS 运行时导出边界；**不得把「能编译」当成「真机通过」**。
+**Android 模拟器验证（2026-09-22，Pixel_9_Pro / 1280×2856 / 480dpi，连本机 Backend）**：
+四个页面均已截图并逐页核对信息结构、标题/副标题、间距、整数示数与底部导航选中态——
+见下节「实机/模拟器验证结果」。
+
+**未验证**：微信开发者工具中的实际渲染（本机 DevTools 服务端口未开启，CLI 无法驱动，
+详见下节）、真机（手机）网络联通、iOS UI。**不得把「能编译」当成「真机通过」。**
 
 ### iOS
 
@@ -237,22 +260,87 @@ Android 平台测试对真实 loopback HTTP 服务发起请求，覆盖 `HttpURL
 
 ---
 
-## 五、当前不支持 / 未完成
+## 五、与微信原生 baseline 的对齐
+
+`client-wx-native` 是**视觉与交互 baseline**：四个页面的信息结构、标题/副标题、暗色背景与薄荷绿强调色、卡片圆角与间距、字号层级、底部四项导航与选中态都按它对齐。本轮以它为准的项目：
+
+- 趋势页：`近1小时 / 近6小时 / 近24小时` 时间窗选择器（驱动查询的 `from`/`to` 绝对边界）、温度/湿度/气体三张统计卡（平均为数字、最低、最高、**峰值时间**）、以及**曲线占位区**——图例 + 四条网格线 + 遮罩文案 + 两端轴标签。
+- 告警页：`全部 / 火情 / 疑似 / 已恢复` 筛选条；卡片为「状态头 + 触发证据面板（2×2）+ 恢复行」。
+- 设置页：温度上限与气体浓度上限两个滑块；期望版本 / 设备确认版本 / 同步状态与保存按钮文案。
+- 监控页：风险卡、三张仪表卡、设备状态卡、蜂鸣器控制卡。
+
+### Baseline 仅为参考，不构成代码依赖
+
+本工程**不引用** `client-wx-native` 的任何代码或资源，也不复制它的内部 JS 实现；上述对齐只是页面结构、视觉 token 与交互语义上的对照。`client-wx-native` 不因本工程而修改。
+
+### 有意偏离 baseline 的地方（每条都写明原因）
+
+| 项目 | baseline | 本工程 | 原因 |
+| --- | --- | --- | --- |
+| 温湿度/气体示数 | 保留一位小数（`toFixed(1)`） | **严格整数** | DHT11 只有 1 ℃ / 1 %RH 分辨率、气体估算只到整 ppm；小数是把整数再格式化出来的，会让人相信一个从未测到的位数。统计里的平均值同样取整，否则卡片上会重新出现小数 |
+| 设置页湿度上限 | 未提供 | 同样不提供控件，但**仍随每次下发携带当前值** | 契约要求阈值更新必须带齐三个字段，丢掉湿度会让每次保存被拒。缺一个可编辑的湿度控件属未完成项，见下节 |
+| 温度上限滑块步长 | `0.5` | `1` | 设备把小数阈值四舍五入到整度执行（`docs/device-protocol.md` §4.3）；步长 0.5 会让「显示 30.5、设备执行 31」 |
+| 告警筛选的第三个 pill | `已确认` | `疑似` | 后端告警状态枚举没有 `acknowledged`（只有 `normal`/`suspect`/`fire_warning`/`recovered`），照搬会让该 pill 永远筛不出任何记录 |
+| 触发证据第一格 | `气体上升`（ppm） | `气体 ADC 上升`（ADC 码） | 本工程消费的契约字段是 ADC 码增量，不是 ppm 增量；沿用 ppm 标签会给一个不在该单位的数字贴错单位 |
+| 趋势曲线 | 占位框（`折线图下一步接入`） | 同样的占位框 | 两端都还没有画曲线；用采样列表冒充趋势图等于把未完成的设计目标报成已完成。`curveReady` 为 `false` 就是这一事实的唯一标记 |
+
+### 运行选择器与取数的关系
+
+时间窗不是在前端过滤已经取回的数据，而是变成查询的绝对边界：
+
+```
+GET /api/v1/devices/MCU001/telemetry
+    ?from=<now - window>&to=<now>&limit=200&order=desc
+```
+
+`order=desc` 是有意的：只给 `limit` 会返回区间内**最早**的那些行，于是「近24小时」描述的是它开头的几分钟，却被当成整段区间。取到之后在共享层反转为时间升序，统计与展示都按升序读。
+
+**已知边界**：契约没有聚合端点，一个窗口内的样本数可能超过一页（设备每 5 秒上报，一小时就有约 720 行，而页面大小是 200）。因此统计描述的是**该窗口内最近一页**的样本，不是窗口内全部样本；「共 N 条样本」里的 N 是这一页的行数。要覆盖整个窗口需要聚合端点。
+
+### 实机/模拟器验证结果（2026-09-22）
+
+**Android 模拟器**（Pixel_9_Pro，1280×2856，480dpi，`http://10.0.2.2:8080` 连本机 Backend）：
+
+| 页面 | 截图 | 核对结果 |
+| --- | --- | --- |
+| 监控 | `android-1-dashboard.png` | 「机房环境总览 / 智慧机房 · 实时动环监测」；风险卡 + 在线 pill；温度 32 / 湿度 42 / 气体 95 **均为整数**；设备状态三行；蜂鸣器控制卡带 baseline 文案「静音不影响环境检测与告警上报」 |
+| 趋势 | `android-2-trends.png` | 三个时间窗 pill，「近1小时」为选中态；三张统计卡含最低/最高/峰值时间（如「峰值 02:55:36」）；曲线区是占位框（图例 + 网格线 + 「趋势曲线即将上线 / 三指标同屏对比」+ 区间起点/此刻），**没有采样列表**；页脚提示与 baseline 一致 |
+| 告警 | `android-3-alerts.png` | 「告警记录 / 早期火情预警事件」；四个筛选 pill；卡片为状态 pill + 触发证据 2×2（气体 ADC 上升 1204 / 触发阈值 150 / 温升速率 / 样本数）+ 恢复行 |
+| 设置 | `android-4-settings.png` | 仅温度上限与气体浓度上限两个滑块，轨道与滑块为薄荷绿（非 Material 默认紫）；设备确认四行；期望版本 = 设备确认版本 = 5 |
+
+**微信开发者工具**：**未执行**。本机 DevTools 的「服务端口」处于关闭状态，CLI 打开项目时报
+`IDE service port disabled`，且该开关只能通过工具 GUI（设置 → 安全设置 → 服务端口）打开，
+无法在无 TTY 的自动化环境里确认；`miniprogram-automator` 因此无法连接并逐页截图。
+MiniApp 侧目前只有 `:shared:miniappTest`（JS 运行时）与 `checkMiniAppHostSelfContained`
+（微信工程自包含、入口文件、toast 闸门）两类证据，**不构成渲染验收**。解除条件：
+在 DevTools 中开启服务端口后执行 `automator.launch({projectPath: 'client-kmp/miniApp'})` 即可。
+
+**后端契约状态**：后端主线已完成字段修复（PR #20 已合入 `main`），`GET /alerts` 返回的 `evidence` 对象严格遵循 `docs/api/openapi.yaml` 与 `backend/docs/api.md` 规范输出 camelCase（`gasAdcRise`、`sampleCount`…）。KMP 共享层运行时已按规范对齐并正确解析，代码与契约已解除阻塞；但本轮修复未重新在真机/模拟器进行端到端渲染复验。
+
+## 六、当前不支持 / 未完成
 
 - **实时推送未接入**：契约中 `/ws/v1/...` WebSocket 与 `WsEnvelope` 尚未在客户端实现，
   当前仅 REST 轮询（仪表盘 3 秒）。
 - **告警确认（acknowledge）未实现**：阶段一无该端点，`AlertState` 因此不含 `acknowledged`。
-- **趋势图为数据列表**：未引入图表库，按后端升序输出采样序列与统计摘要；
-  超过 12 条时界面只预览末尾若干条。
-- **历史查询窗口固定**：未暴露 `from` / `to` / `cursor` 参数，仅用 `limit`。
+- **趋势曲线仍是占位框**：未引入图表库，两端都不绘制曲线。共享模型保留升序采样序列
+  （`trends.series`）供将来接图使用，但**页面不再渲染它**——用采样列表冒充趋势图等于把
+  未完成的设计目标报成已完成。`TrendsView.curveReady` 恒为 `false` 就是这一事实的标记。
+- **历史查询无分页**：窗口已用 `from`/`to` 表达（见上节），但只取一页；`cursor` 未暴露，
+  窗口内样本多于一页时统计只覆盖最近一页。
+- **设置页缺湿度控件**：baseline 只有温度与气体两个滑块，本工程照此实现；湿度值仍随每次
+  下发携带，但没有可编辑入口。补一个湿度滑块属未完成项。
+- **告警缺少 `acknowledged` 状态**：后端状态枚举没有该值，因此筛选条的第三个 pill 用
+  「疑似」替代 baseline 的「已确认」。
 - **鉴权未接入**：契约的 `BearerAuth` 为阶段一占位，后端本地以 `AUTH_MODE=none` 运行，
   客户端未发送 Token。
 - **小程序包体积**：见上节「包体积」风险。
-- **真机与开发者工具渲染**：未执行。
+- **微信开发者工具渲染**：未执行（服务端口未开启，见上节验证结果）。
+- **真机（手机）网络联通**：未执行。
+- **端到端告警渲染重验**：后端契约虽已在 `main` 修复对齐，但本分支未重新进行真机/模拟器端到端渲染验收。
 
 ---
 
-## 六、协作流程
+## 七、协作流程
 
 ```bash
 git switch main && git pull --ff-only

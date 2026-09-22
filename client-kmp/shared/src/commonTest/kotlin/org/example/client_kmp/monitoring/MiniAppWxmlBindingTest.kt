@@ -78,10 +78,24 @@ class MiniAppWxmlBindingTest {
         assertHasAll(
             keysOf(json),
             "hasData", "sampleCount", "gasSampleCount", "temperature", "humidity", "gas", "series",
+            // The window selector and the curve frame are rendered by the host, so
+            // a rename here would blank them without failing anything else.
+            "windowKey", "windowLabel", "windowOptions",
+            "curveStatusText", "curveMaskTitle", "curveMaskSub",
+            "curveAxisStart", "curveAxisEnd", "curveReady", "curveLegend", "footerHint",
         )
         assertHasAll(
             keysOfField(json, "temperature"),
-            "minimum", "average", "maximum",
+            // `peakAt` is the peak-time line on every statistic card.
+            "minimum", "average", "maximum", "peakAt",
+        )
+        assertHasAll(
+            keysOfRow(json, "curveLegend"),
+            "label", "tone",
+        )
+        assertHasAll(
+            keysOfRow(json, "windowOptions"),
+            "key", "label",
         )
         // `key` is what the list uses for `wx:key`; it must always be emitted.
         assertHasAll(
@@ -113,7 +127,16 @@ class MiniAppWxmlBindingTest {
             ),
         )
 
-        assertHasAll(keysOf(json), "count", "items")
+        assertHasAll(
+            keysOf(json),
+            // `visibleCount` decides the empty-state line and `filters` draws the
+            // filter bar; `filterKey` marks the active pill.
+            "count", "visibleCount", "filterKey", "filters", "items",
+        )
+        assertHasAll(
+            keysOfRow(json, "filters"),
+            "key", "label",
+        )
         assertHasAll(
             keysOfRow(json, "items"),
             // `id` is the wx:key; the rest are rendered in the card.
@@ -184,5 +207,9 @@ class MiniAppWxmlBindingTest {
             error("the binding test must not perform I/O")
 
         override fun newIdempotencyKey(): String = error("the binding test must not perform I/O")
+
+        // These tests only call the encoders, so the clock is never read; it is
+        // implemented to keep the stub honest rather than to be meaningful.
+        override fun nowMillis(): Long = 0L
     }
 }

@@ -102,4 +102,18 @@ module.exports = {
   awaitCommandOutcome: call('awaitCommandOutcome'),
   mute: call('mute'),
   updateThresholds: call('updateThresholds'),
+  /**
+   * The selector option lists, as a JSON string.
+   *
+   * Synchronous because it performs no I/O: the page draws the trends window
+   * selector before it has fetched any history, and WXML cannot enumerate a
+   * Kotlin enum, so the labels have to come from the shared layer.
+   */
+  selectors: function () {
+    try {
+      return monitor.selectors()
+    } catch (cause) {
+      throw toError(cause)
+    }
+  },
 }

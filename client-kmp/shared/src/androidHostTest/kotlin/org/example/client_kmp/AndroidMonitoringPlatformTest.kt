@@ -73,11 +73,17 @@ class AndroidMonitoringPlatformTest {
         val view = MonitoringClient(AndroidMonitoringPlatform(), baseUrl).loadTrends()
 
         assertEquals(1, view.sampleCount)
-        assertEquals("21.5", view.temperature.average)
+        // 21.5 rounds to 22: the DHT11 resolves whole degrees, so the displayed
+        // figure is a whole number even when the wire carries a fraction.
+        assertEquals("22", view.temperature.average)
         val request = requests.single()
         assertEquals("GET", request.method)
         assertEquals("/api/v1/devices/MCU001/telemetry", request.path)
-        assertEquals("limit=60&order=asc", request.query)
+        // The bounds come from the real clock through this platform's own
+        // `nowMillis`, so the shape is asserted rather than the exact instants.
+        assertTrue(request.query.startsWith("from=20"))
+        assertTrue(request.query.contains("&to=20"))
+        assertTrue(request.query.endsWith("&limit=200&order=desc"))
     }
 
     @Test

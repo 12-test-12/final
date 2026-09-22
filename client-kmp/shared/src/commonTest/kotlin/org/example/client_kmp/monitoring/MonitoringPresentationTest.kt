@@ -185,9 +185,9 @@ class MonitoringPresentationTest {
         val view = MonitoringPresentation.trends(listOf(point(temperatureC = 25.0, humidityRh = 60.0, gasPpm = 12.0)))
 
         assertEquals(1, view.sampleCount)
-        assertEquals(MetricSummary("25", "25", "25"), view.temperature)
-        assertEquals(MetricSummary("60", "60", "60"), view.humidity)
-        assertEquals(MetricSummary("12", "12", "12"), view.gas)
+        assertEquals(MetricSummary("25", "25", "25", "10:00:00"), view.temperature)
+        assertEquals(MetricSummary("60", "60", "60", "10:00:00"), view.humidity)
+        assertEquals(MetricSummary("12", "12", "12", "10:00:00"), view.gas)
         assertEquals(1, view.gasSampleCount)
     }
 
@@ -520,15 +520,18 @@ class MonitoringPresentationTest {
     // --- formatting edge cases -------------------------------------------------------------
 
     @Test
-    fun numbersKeepOneDecimalAndDropATrailingZero() {
+    fun readingsAreWholeNumbersBecauseTheSensorResolvesWholeUnits() {
+        // The DHT11 resolves one degree and one percent, and the gas estimate one
+        // ppm. A fractional reading would be precision the device cannot produce,
+        // so a value that arrives with a fraction is rounded, not printed as is.
         val view = MonitoringPresentation.dashboard(
             status(),
             telemetry(temperatureC = 25.5, humidityRh = 60.0, gasPpm = 12.34),
         )
 
-        assertEquals("25.5", view.temperatureText)
+        assertEquals("26", view.temperatureText)
         assertEquals("60", view.humidityText)
-        assertEquals("12.3", view.gasText)
+        assertEquals("12", view.gasText)
     }
 
     @Test
@@ -545,6 +548,188 @@ class MonitoringPresentationTest {
     }
 
     // --- fixtures ---------------------------------------------------------------------------
+
+    // --- trends: window selector, peak time, curve placeholder -------------------------
+
+    @Test
+    fun theWindowSelectorOffersAllThreeBaselineWindowsAndMarksTheActiveOne() {
+        val view = MonitoringPresentation.trends(listOf(point()), TrendWindow.LAST_SIX_HOURS)
+
+        assertEquals("LAST_SIX_HOURS", view.windowKey)
+        assertEquals("近6小时", view.windowLabel)
+        assertEquals(
+            listOf("LAST_HOUR" to "近1小时", "LAST_SIX_HOURS" to "近6小时", "LAST_DAY" to "近24小时"),
+            view.windowOptions.map { it.key to it.label },
+        )
+    }
+
+    @Test
+    fun theCurveBlockIsAMarkedPlaceholderCarryingTheBaselineCopy() {
+        val view = MonitoringPresentation.trends(listOf(point()))
+
+        // Nothing in this client plots data yet, so the flag must stay false.
+        // A sample list rendered where the curve belongs would report the design
+        // goal as met, which is why the flag exists at all.
+        assertFalse(view.curveReady)
+        assertEquals("折线图下一步接入", view.curveStatusText)
+        assertEquals("趋势曲线即将上线", view.curveMaskTitle)
+        assertEquals("三指标同屏对比", view.curveMaskSub)
+        assertEquals("区间起点", view.curveAxisStart)
+        assertEquals("此刻", view.curveAxisEnd)
+        assertEquals("统计基于所选区间内的真实历史样本计算", view.footerHint)
+        assertEquals(
+            listOf("温度" to Tone.DANGER, "湿度" to Tone.INFO, "气体" to Tone.MINT),
+            view.curveLegend.map { it.label to it.tone },
+        )
+    }
+
+    @Test
+    fun everyWindowKeepsTheSameSelectorAndCurveCopy() {
+        // The selector and the curve frame are chrome, so a window switch must not
+        // change them; only the key and the samples may differ.
+        val perWindow = TrendWindow.entries.map { MonitoringPresentation.trends(listOf(point()), it) }
+
+        assertEquals(1, perWindow.map { it.windowOptions }.distinct().size)
+        assertEquals(1, perWindow.map { it.curveMaskTitle }.distinct().size)
+        assertEquals(3, perWindow.map { it.windowKey }.distinct().size)
+    }
+
+    @Test
+    fun thePeakTimeNamesWhenTheHighestReadingWasTaken() {
+        val view = MonitoringPresentation.trends(
+            listOf(
+                point(receivedAt = "2026-09-21T10:00:00Z", temperatureC = 25.0),
+                point(receivedAt = "2026-09-21T11:00:00Z", temperatureC = 30.0),
+                point(receivedAt = "2026-09-21T12:00:00Z", temperatureC = 27.0),
+            ),
+        )
+
+        assertEquals("30", view.temperature.maximum)
+        assertEquals("11:00:00", view.temperature.peakAt)
+        // Each metric reports its own peak, not the sample that peaked overall.
+        assertEquals("10:00:00", view.humidity.peakAt)
+    }
+
+    @Test
+    fun aWindowWithNoSamplesReportsEmptyCellsRatherThanZeroes() {
+        val view = MonitoringPresentation.trends(emptyList())
+
+        assertEquals("--", view.temperature.peakAt)
+        assertEquals("--", view.gas.peakAt)
+        assertFalse(view.hasData)
+    }
+
+    @Test
+    fun aWindowWithNoCalibratedGasReadingLeavesTheGasPeakEmpty() {
+        val view = MonitoringPresentation.trends(listOf(point(gasPpm = null), point(gasPpm = null)))
+
+        assertEquals(0, view.gasSampleCount)
+        assertEquals("--", view.gas.peakAt)
+        assertEquals("--", view.gas.average)
+    }
+
+    @Test
+    fun statisticsAreWholeNumbersEvenWhenTheAverageIsNot() {
+        // 20 and 21 average to 20.5, which must not reach the screen as a decimal.
+        val view = MonitoringPresentation.trends(
+            listOf(
+                point(receivedAt = "2026-09-21T10:00:00Z", temperatureC = 20.0),
+                point(receivedAt = "2026-09-21T10:00:01Z", temperatureC = 21.0),
+            ),
+        )
+
+        assertEquals("20", view.temperature.minimum)
+        assertEquals("21", view.temperature.average)
+        assertEquals("21", view.temperature.maximum)
+    }
+
+    @Test
+    fun aNonFiniteSampleIsLeftOutOfTheStatisticsInsteadOfBreakingThem() {
+        val view = MonitoringPresentation.trends(
+            listOf(
+                point(receivedAt = "2026-09-21T10:00:00Z", temperatureC = 22.0),
+                point(receivedAt = "2026-09-21T10:00:01Z", temperatureC = Double.NaN),
+            ),
+        )
+
+        // The summary describes the sample that exists; the count still reports
+        // both rows, because the count is what was fetched.
+        assertEquals("22", view.temperature.maximum)
+        assertEquals("10:00:00", view.temperature.peakAt)
+        assertEquals(2, view.sampleCount)
+    }
+
+    // --- alerts: filter bar -----------------------------------------------------------
+
+    @Test
+    fun theFilterBarOffersFourStablePillsInTheBaselinesOrder() {
+        assertEquals(
+            listOf("all", "fire_warning", "suspect", "recovered"),
+            MonitoringPresentation.alertFilterOptions().map { it.key },
+        )
+        assertEquals(
+            listOf("全部", "火情", "疑似", "已恢复"),
+            MonitoringPresentation.alertFilterOptions().map { it.label },
+        )
+    }
+
+    @Test
+    fun aFilterKeepsOnlyItsOwnStateAndReportsBothTotals() {
+        val events = listOf(
+            alert(state = AlertState.fire_warning),
+            alert(state = AlertState.suspect),
+            alert(state = AlertState.recovered),
+        )
+
+        val all = MonitoringPresentation.alerts(events, AlertFilter.ALL)
+        assertEquals(3, all.count)
+        assertEquals(3, all.visibleCount)
+        assertEquals("all", all.filterKey)
+
+        val fire = MonitoringPresentation.alerts(events, AlertFilter.FIRE_WARNING)
+        assertEquals(3, fire.count)
+        assertEquals(1, fire.visibleCount)
+        assertEquals("fire_warning", fire.filterKey)
+        assertEquals(listOf("火情预警"), fire.items.map { it.stateText })
+    }
+
+    @Test
+    fun aFilterWithNoMatchesStillNamesItselfSoThePillStaysSelected() {
+        val view = MonitoringPresentation.alerts(listOf(alert(state = AlertState.recovered)), AlertFilter.FIRE_WARNING)
+
+        assertEquals(1, view.count)
+        assertEquals(0, view.visibleCount)
+        assertEquals("fire_warning", view.filterKey)
+        assertTrue(view.items.isEmpty())
+    }
+
+    @Test
+    fun theSelectorPayloadCarriesBothListsForTheMiniApp() {
+        val selectors = MonitoringPresentation.selectors()
+
+        assertEquals(MonitoringPresentation.trendWindowOptions(), selectors.windows)
+        assertEquals(MonitoringPresentation.alertFilterOptions(), selectors.filters)
+    }
+
+    // --- settings and dashboard: shared copy ------------------------------------------
+
+    @Test
+    fun theSettingsViewCarriesTheHumidityLimitEvenThoughItIsNotEditable() {
+        // The contract requires all three fields on every threshold update, so the
+        // value has to survive to the host even though the baseline exposes only
+        // two controls.
+        val view = MonitoringPresentation.settings(thresholds(ConfirmationState.confirmed))
+
+        assertEquals(80.0, view.humidityHighRh)
+        assertEquals("下发后需设备确认，确认前仍按旧规则报警", view.saveHint)
+    }
+
+    @Test
+    fun theDashboardCarriesTheBaselinesMutePromise() {
+        val view = MonitoringPresentation.dashboard(status(), telemetry())
+
+        assertEquals("静音不影响环境检测与告警上报", view.muteHint)
+    }
 
     private fun status(
         deviceId: String = "MCU001",

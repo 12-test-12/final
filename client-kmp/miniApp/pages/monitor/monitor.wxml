@@ -2,10 +2,18 @@
   WeChat host UI. Every label, colour token and formatted value comes from the
   KMP shared runtime, so this file only arranges data and never derives it.
   Run `./gradlew prepareMiniAppHost` in client-kmp before opening DevTools.
+
+  Layout follows client-wx-native, the frozen visual baseline: page head, section
+  heads, glass cards, a segmented selector and a four-item bottom bar. The trends
+  curve is the baseline's placeholder frame — a legend, four grid lines, a masked
+  note and two axis labels — and deliberately not a list of samples. See
+  `curveReady` in the shared model.
 -->
 <view class="page">
-  <view class="page-title">{{title}}</view>
-  <view class="page-sub">{{subtitle}}</view>
+  <view class="page-head">
+    <view class="page-title">{{title}}</view>
+    <view class="page-sub">{{subtitle}}</view>
+  </view>
   <view class="hint" wx:if="{{loading}}">数据加载中...</view>
   <view class="hint danger" wx:if="{{error}}">{{error}}</view>
 
@@ -55,8 +63,10 @@
     <view class="section-head"><text class="section-title">远程控制</text><text class="section-tip">静音不影响检测与上报</text></view>
     <view class="card">
       <view class="control-title">蜂鸣器控制</view>
-      <view class="muted">本地报警状态不会因静音而清除</view>
-      <view class="command-hint" wx:if="{{commandHint}}">{{commandHint}}</view>
+      <view class="muted">{{dashboard.muteHint}}</view>
+      <!-- The tone comes from the shared command view, so a rejection, a timeout
+           and a device confirmation are visually distinct. -->
+      <view class="command-hint command-hint-{{commandTone}}" wx:if="{{commandHint}}">{{commandHint}}</view>
       <button class="btn" disabled="{{muting}}" bindtap="onMute">
         {{dashboard.buzzerMuted ? '恢复鸣叫' : '远程静音'}}
       </button>
@@ -65,77 +75,120 @@
 
   <!-- 趋势 -->
   <block wx:if="{{tab === 1}}">
+    <view class="seg">
+      <view class="seg-item {{item.key === trendWindow ? 'seg-active' : ''}}"
+            wx:for="{{windowOptions}}" wx:key="key"
+            data-key="{{item.key}}" bindtap="onRange">{{item.label}}</view>
+    </view>
+
     <view class="hint" wx:if="{{trends && !trends.hasData}}">所选区间内没有遥测样本</view>
     <block wx:if="{{trends && trends.hasData}}">
       <view class="section-head"><text class="section-title">统计摘要</text><text class="section-tip">共 {{trends.sampleCount}} 条样本</text></view>
       <scroll-view scroll-x class="stats"><view class="stats-inner">
         <view class="stat card">
-          <text class="muted">温度 °C</text>
+          <view class="row"><text class="muted">温度</text><text class="muted">°C</text></view>
           <text class="stat-main">{{trends.temperature.average}}</text>
-          <text class="muted">最低 {{trends.temperature.minimum}} · 最高 {{trends.temperature.maximum}}</text>
+          <view class="stat-meta">
+            <view class="stat-meta-item"><text class="muted">最低</text><text class="stat-meta-value">{{trends.temperature.minimum}}</text></view>
+            <view class="stat-meta-item"><text class="muted">最高</text><text class="stat-meta-value">{{trends.temperature.maximum}}</text></view>
+          </view>
+          <text class="stat-extreme">峰值 {{trends.temperature.peakAt}}</text>
         </view>
         <view class="stat card">
-          <text class="muted">湿度 %RH</text>
+          <view class="row"><text class="muted">湿度</text><text class="muted">%RH</text></view>
           <text class="stat-main">{{trends.humidity.average}}</text>
-          <text class="muted">最低 {{trends.humidity.minimum}} · 最高 {{trends.humidity.maximum}}</text>
+          <view class="stat-meta">
+            <view class="stat-meta-item"><text class="muted">最低</text><text class="stat-meta-value">{{trends.humidity.minimum}}</text></view>
+            <view class="stat-meta-item"><text class="muted">最高</text><text class="stat-meta-value">{{trends.humidity.maximum}}</text></view>
+          </view>
+          <text class="stat-extreme">峰值 {{trends.humidity.peakAt}}</text>
         </view>
         <view class="stat card">
-          <text class="muted">气体 ppm</text>
+          <view class="row"><text class="muted">气体</text><text class="muted">ppm</text></view>
           <text class="stat-main">{{trends.gas.average}}</text>
-          <text class="muted">
-            <block wx:if="{{trends.gasSampleCount > 0}}">最低 {{trends.gas.minimum}} · 最高 {{trends.gas.maximum}}</block>
-            <block wx:else>无已校准气体读数</block>
-          </text>
+          <view class="stat-meta">
+            <block wx:if="{{trends.gasSampleCount > 0}}">
+              <view class="stat-meta-item"><text class="muted">最低</text><text class="stat-meta-value">{{trends.gas.minimum}}</text></view>
+              <view class="stat-meta-item"><text class="muted">最高</text><text class="stat-meta-value">{{trends.gas.maximum}}</text></view>
+            </block>
+            <block wx:else><text class="muted">无已校准气体读数</text></block>
+          </view>
+          <text class="stat-extreme" wx:if="{{trends.gasSampleCount > 0}}">峰值 {{trends.gas.peakAt}}</text>
         </view>
       </view></scroll-view>
-      <view class="section-head"><text class="section-title">采样序列</text><text class="section-tip">按时间升序</text></view>
-      <view class="card">
-        <view class="trend-row" wx:for="{{trends.series}}" wx:key="key">
-          <text>{{item.timeText}}</text>
-          <text>{{item.temperatureText}}° · {{item.humidityText}}% · {{item.gasText}}ppm</text>
-        </view>
+      <view class="hint" wx:if="{{trends.gasSampleCount < trends.sampleCount}}">
+        {{trends.sampleCount - trends.gasSampleCount}} 条样本没有已校准气体读数，未计入气体统计
       </view>
+
+      <view class="section-head"><text class="section-title">曲线视图</text><text class="section-tip">{{trends.curveStatusText}}</text></view>
+      <view class="card chart-card">
+        <view class="legend">
+          <view class="legend-item" wx:for="{{trends.curveLegend}}" wx:key="label">
+            <view class="legend-dot dot-{{item.tone}}"></view><text>{{item.label}}</text>
+          </view>
+        </view>
+        <view class="chart-body">
+          <view class="grid-line" wx:for="{{[0,1,2,3]}}" wx:key="*this"></view>
+          <view class="chart-mask">
+            <view class="chart-mask-title">{{trends.curveMaskTitle}}</view>
+            <view class="chart-mask-sub">{{trends.curveMaskSub}}</view>
+          </view>
+        </view>
+        <view class="chart-xaxis"><text>{{trends.curveAxisStart}}</text><text>{{trends.curveAxisEnd}}</text></view>
+      </view>
+      <view class="hint">{{trends.footerHint}}</view>
     </block>
   </block>
 
   <!-- 告警 -->
   <block wx:if="{{tab === 2}}">
-    <view class="hint" wx:if="{{!loading && alertCount === 0}}">暂无告警记录</view>
-    <view class="card alert tone-{{item.tone}}" wx:for="{{alerts}}" wx:key="id">
+    <view class="seg">
+      <view class="seg-item {{item.key === alertFilter ? 'seg-active' : ''}}"
+            wx:for="{{alertFilters}}" wx:key="key"
+            data-key="{{item.key}}" bindtap="onFilter">{{item.label}}</view>
+    </view>
+
+    <view class="hint" wx:if="{{!loading && alertCount === 0}}">🛡 该分类下暂无告警记录</view>
+    <view class="card alert" wx:for="{{alerts}}" wx:key="id">
       <view class="row">
-        <text class="pill pill-{{item.tone}}">{{item.stateText}}</text>
+        <view class="row alert-state">
+          <view class="alert-dot dot-{{item.tone}}"></view>
+          <text class="pill pill-{{item.tone}}">{{item.stateText}}</text>
+        </view>
         <text class="muted">{{item.startedAt}}</text>
       </view>
-      <view class="kv"><text>结束时间</text><text>{{item.endedAt}}</text></view>
       <view class="evidence">
-        <view class="kv"><text>气体 ADC 上升</text><text>{{item.gasAdcRiseText}}（阈值 {{item.gasAdcRiseThresholdText}}）</text></view>
-        <view class="kv"><text>温升速率</text><text>{{item.temperatureRateText}}（阈值 {{item.temperatureRateThresholdText}}）</text></view>
-        <view class="kv"><text>样本数</text><text>{{item.sampleCountText}}</text></view>
-        <view class="kv"><text>窗口</text><text>{{item.windowSecondsText}} 秒</text></view>
+        <text class="muted">触发证据</text>
+        <view class="evidence-grid">
+          <view class="evidence-cell"><text class="muted">气体 ADC 上升</text><text class="evidence-value">{{item.gasAdcRiseText}}</text></view>
+          <view class="evidence-cell"><text class="muted">触发阈值</text><text class="evidence-value">{{item.gasAdcRiseThresholdText}}</text></view>
+          <view class="evidence-cell"><text class="muted">温升速率</text><text class="evidence-value">{{item.temperatureRateText}}</text></view>
+          <view class="evidence-cell"><text class="muted">样本数</text><text class="evidence-value">{{item.sampleCountText}}</text></view>
+        </view>
       </view>
+      <view class="alert-foot" wx:if="{{!item.active}}">已恢复 {{item.endedAt}}</view>
     </view>
   </block>
 
   <!-- 设置 -->
   <block wx:if="{{tab === 3 && settings}}">
-    <view class="command-hint" wx:if="{{commandHint}}">{{commandHint}}</view>
+    <view class="section-head"><text class="section-title">报警规则</text><text class="section-tip">修改后需下发设备</text></view>
     <view class="threshold card">
       <text class="muted">温度上限</text>
       <view class="set-value">{{temperatureHighC}} <text>°C</text></view>
-      <slider min="0" max="80" step="0.5" value="{{temperatureHighC}}" activeColor="#3fe8c3"
+      <!-- Step 1, not the baseline's 0.5: the device resolves whole degrees and
+           rounds anything finer, so a half-degree step would set a value the
+           device then changes. See docs/device-protocol.md §4.3. -->
+      <slider min="0" max="80" step="1" value="{{temperatureHighC}}" activeColor="#3fe8c3"
               bindchanging="onTemp" bindchange="onTemp" />
-    </view>
-    <view class="threshold card">
-      <text class="muted">湿度上限</text>
-      <view class="set-value">{{humidityHighRh}} <text>%RH</text></view>
-      <slider min="0" max="100" step="1" value="{{humidityHighRh}}" activeColor="#3fe8c3"
-              bindchanging="onHumidity" bindchange="onHumidity" />
+      <view class="row range-hint"><text>0 °C</text><text>80 °C</text></view>
     </view>
     <view class="threshold card">
       <text class="muted">气体浓度上限</text>
       <view class="set-value">{{gasHighPpm}} <text>ppm</text></view>
       <slider min="1" max="999" step="1" value="{{gasHighPpm}}" activeColor="#3fe8c3"
               bindchanging="onGas" bindchange="onGas" />
+      <view class="row range-hint"><text>1 ppm</text><text>999 ppm</text></view>
     </view>
 
     <view class="section-head"><text class="section-title">设备确认</text><text class="section-tip">202 仅表示命令已接受</text></view>
@@ -148,13 +201,23 @@
       <view class="kv"><text>设备确认版本</text><text>{{settings.confirmedVersion || '--'}}</text></view>
       <view class="kv"><text>更新时间</text><text>{{settings.updatedAt}}</text></view>
     </view>
+    <view class="command-hint command-hint-{{commandTone}}" wx:if="{{commandHint}}">{{commandHint}}</view>
     <button class="btn" loading="{{saving}}" disabled="{{saving}}" bindtap="onSave">保存并下发到设备</button>
+    <view class="hint">{{settings.saveHint}}</view>
   </block>
 </view>
 
 <view class="bottom-nav">
-  <view class="nav-item {{tab === 0 ? 'nav-active' : ''}}" data-tab="0" bindtap="onTab"><text class="nav-icon">◉</text><text>监控</text></view>
-  <view class="nav-item {{tab === 1 ? 'nav-active' : ''}}" data-tab="1" bindtap="onTab"><text class="nav-icon">⌁</text><text>趋势</text></view>
-  <view class="nav-item {{tab === 2 ? 'nav-active' : ''}}" data-tab="2" bindtap="onTab"><text class="nav-icon">!</text><text>告警</text></view>
-  <view class="nav-item {{tab === 3 ? 'nav-active' : ''}}" data-tab="3" bindtap="onTab"><text class="nav-icon">⚙</text><text>设置</text></view>
+  <view class="nav-item {{tab === 0 ? 'nav-active' : ''}}" data-tab="0" bindtap="onTab">
+    <text class="nav-icon">◉</text><text class="nav-label" wx:if="{{tab === 0}}">监控</text>
+  </view>
+  <view class="nav-item {{tab === 1 ? 'nav-active' : ''}}" data-tab="1" bindtap="onTab">
+    <text class="nav-icon">⌁</text><text class="nav-label" wx:if="{{tab === 1}}">趋势</text>
+  </view>
+  <view class="nav-item {{tab === 2 ? 'nav-active' : ''}}" data-tab="2" bindtap="onTab">
+    <text class="nav-icon">!</text><text class="nav-label" wx:if="{{tab === 2}}">告警</text>
+  </view>
+  <view class="nav-item {{tab === 3 ? 'nav-active' : ''}}" data-tab="3" bindtap="onTab">
+    <text class="nav-icon">⚙</text><text class="nav-label" wx:if="{{tab === 3}}">设置</text>
+  </view>
 </view>

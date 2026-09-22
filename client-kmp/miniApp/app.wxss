@@ -1,54 +1,131 @@
+/*
+  Global design tokens and shared chrome.
+
+  The values mirror client-wx-native, the frozen visual baseline: the same deep
+  ink-green background, frosted-glass cards, mint accent gradient and rpx type
+  scale, so a screen moved between the two clients keeps its colours and spacing.
+  Tone classes at the bottom are shared with the KMP runtime
+  (`MonitoringPresentation.Tone`); hosts map the same four names, so an alert
+  cannot be red on Android and amber here for the same backend state.
+*/
 page {
   --bg: #071310;
+  --glass: rgba(255, 255, 255, .055);
+  --glass-2: rgba(255, 255, 255, .085);
+  --glass-line: rgba(255, 255, 255, .09);
   --surface: #10231e;
   --surface-2: #17302a;
-  --line: rgba(255,255,255,.09);
+  --line: rgba(255, 255, 255, .09);
   --mint: #3fe8c3;
+  --accent-start: #45f0cb;
+  --accent-deep: #16b98b;
+  --on-accent: #04241d;
   --text: #ecf5f2;
   --muted: #8fa8a2;
+  --text-3: #61786f;
   --danger: #fb7185;
   --warning: #f5c96b;
   --info: #7dd3fc;
-  background: radial-gradient(800rpx 520rpx at 50% -10%, rgba(24,130,100,.30), transparent 62%), var(--bg);
+  --r-lg: 30rpx;
+  --r-md: 24rpx;
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(820rpx 560rpx at 50% -12%, rgba(24, 130, 100, .30), transparent 62%),
+    radial-gradient(600rpx 420rpx at 100% 8%, rgba(22, 185, 139, .12), transparent 60%);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
+  font-size: 28rpx;
+  line-height: 1.6;
 }
-.page { padding: 40rpx 28rpx 180rpx; }
-.page-title { font-size: 46rpx; font-weight: 600; }
-.page-sub { color: var(--muted); font-size: 22rpx; margin: 8rpx 0 28rpx; }
-.section-head { display:flex; justify-content:space-between; align-items:baseline; margin: 36rpx 4rpx 16rpx; }
-.section-title { font-size: 32rpx; font-weight:600; }
-.section-tip { color:var(--muted); font-size:21rpx; }
-.card { margin: 16rpx 0; padding: 30rpx; border-radius: 30rpx; background: linear-gradient(155deg,var(--surface-2),var(--surface)); border:1rpx solid var(--line); box-shadow:0 18rpx 42rpx rgba(0,0,0,.3); }
-.muted { color:var(--muted); font-size:23rpx; }
-.danger { color:var(--danger); }
-.mint { color:var(--mint); }
-.warning { color:var(--warning); }
-.row { display:flex; align-items:center; justify-content:space-between; }
-.pill { padding:7rpx 20rpx; border-radius:999rpx; color:var(--mint); background:rgba(63,232,195,.14); font-size:21rpx; }
-.btn { margin-top:24rpx; border-radius:999rpx; background:linear-gradient(135deg,#45f0cb,#16b98b); color:#04241d; font-weight:600; }
-.hint { text-align:center; color:var(--muted); padding:50rpx 0; }
-.bottom-nav { position:fixed; left:0; right:0; bottom:0; height:130rpx; padding-bottom:env(safe-area-inset-bottom); display:flex; background:rgba(13,30,26,.97); border-top:1rpx solid var(--line); z-index:20; }
-.nav-item { flex:1; display:flex; flex-direction:column; justify-content:center; align-items:center; color:#61786f; font-size:21rpx; }
-.nav-icon { font-size:34rpx; line-height:42rpx; }
-.nav-active { color:var(--mint); }
 
-/* Tone tokens shared with the KMP runtime (`MonitoringPresentation.Tone`).
-   Hosts map the same four names, so an alert can never be red on Android and
-   amber here for the same backend state. */
-.tone-mint .risk-text { color:var(--mint); }
-.tone-warning .risk-text { color:var(--warning); }
-.tone-danger .risk-text { color:var(--danger); }
-.tone-info .risk-text { color:var(--info); }
-.pill-mint { color:var(--mint); background:rgba(63,232,195,.14); }
-.pill-warning { color:var(--warning); background:rgba(245,201,107,.16); }
-.pill-danger { color:var(--danger); background:rgba(251,113,133,.16); }
-.pill-info { color:var(--info); background:rgba(125,211,252,.16); }
-.pill-muted { color:var(--muted); background:rgba(143,168,162,.16); }
-.tone-text-mint { color:var(--mint); }
-.tone-text-warning { color:var(--warning); }
-.tone-text-danger { color:var(--danger); }
-.tone-text-info { color:var(--info); }
+/* The page itself carries no horizontal padding: blocks set their own inset, so
+   a full-bleed scroll row can escape the card margin. */
+.page { padding: 0 0 200rpx; }
+.page-head { padding: 44rpx 32rpx 10rpx; }
+.page-title { font-size: 46rpx; font-weight: 600; letter-spacing: 1rpx; }
+.page-sub { color: var(--text-3); font-size: 22rpx; margin-top: 10rpx; letter-spacing: 1rpx; }
 
-/* Compact inline notice for a command that is still awaiting the device. */
-.command-hint { margin-top:18rpx; padding:14rpx 20rpx; border-radius:16rpx; color:var(--warning); background:rgba(245,201,107,.12); font-size:22rpx; }
+.section-head { display: flex; justify-content: space-between; align-items: baseline; margin: 44rpx 32rpx 20rpx; }
+.section-title { font-size: 32rpx; font-weight: 600; }
+.section-tip { color: var(--muted); font-size: 21rpx; }
+
+.card {
+  margin: 20rpx 28rpx;
+  padding: 30rpx;
+  border-radius: var(--r-lg);
+  background: linear-gradient(160deg, var(--glass-2), var(--glass));
+  border: 1rpx solid var(--glass-line);
+  box-shadow: 0 18rpx 40rpx rgba(0, 0, 0, .34), inset 0 1rpx 0 rgba(255, 255, 255, .09);
+  overflow: hidden;
+}
+
+.muted { color: var(--muted); font-size: 23rpx; }
+.danger { color: var(--danger); }
+.mint { color: var(--mint); }
+.warning { color: var(--warning); }
+.row { display: flex; align-items: center; justify-content: space-between; }
+.pill { padding: 7rpx 20rpx; border-radius: 999rpx; color: var(--mint); background: rgba(63, 232, 195, .14); font-size: 21rpx; }
+
+/* Primary action: the one accent gradient the baseline uses for every filled
+   control, with the dark on-colour it pairs with. */
+.btn {
+  margin: 24rpx 0 0;
+  height: 94rpx;
+  line-height: 94rpx;
+  border-radius: 999rpx;
+  background: linear-gradient(135deg, var(--accent-start), var(--accent-deep));
+  color: var(--on-accent);
+  font-size: 30rpx;
+  font-weight: 600;
+  letter-spacing: 1rpx;
+}
+.btn[disabled] { opacity: .6; color: var(--on-accent); }
+
+.hint { text-align: center; color: var(--muted); padding: 40rpx 32rpx; font-size: 23rpx; }
+.kv { display: flex; justify-content: space-between; padding: 26rpx 0; border-bottom: 1rpx solid rgba(255, 255, 255, .05); color: var(--muted); font-size: 26rpx; }
+.kv:last-child { border-bottom: none; }
+.kv text:last-child { color: var(--text); font-weight: 600; text-align: right; }
+
+/* Floating pill navigation, as in the baseline: the selected item widens and
+   reveals its label on the accent gradient rather than gaining a separate bar. */
+.bottom-nav {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(28rpx + env(safe-area-inset-bottom));
+  width: 600rpx;
+  padding: 10rpx;
+  border-radius: 999rpx;
+  display: flex;
+  background: rgba(13, 30, 26, .9);
+  border: 1rpx solid var(--glass-line);
+  box-shadow: 0 22rpx 48rpx rgba(0, 0, 0, .5);
+  z-index: 20;
+}
+.nav-item { flex: 1; height: 76rpx; display: flex; align-items: center; justify-content: center; color: var(--text-3); font-size: 24rpx; border-radius: 999rpx; transition: all .28s ease; }
+.nav-icon { font-size: 34rpx; line-height: 42rpx; }
+.nav-label { margin-left: 10rpx; font-size: 24rpx; font-weight: 600; letter-spacing: 1rpx; }
+.nav-active { flex: 1.7; background: linear-gradient(135deg, var(--accent-start), var(--accent-deep)); color: var(--on-accent); font-weight: 600; box-shadow: 0 12rpx 26rpx rgba(22, 185, 139, .34); }
+
+/* Tone tokens shared with the KMP runtime (`MonitoringPresentation.Tone`). */
+.tone-mint .risk-text { color: var(--mint); }
+.tone-warning .risk-text { color: var(--warning); }
+.tone-danger .risk-text { color: var(--danger); }
+.tone-info .risk-text { color: var(--info); }
+.pill-mint { color: var(--mint); background: rgba(63, 232, 195, .16); }
+.pill-warning { color: var(--warning); background: rgba(245, 201, 107, .16); }
+.pill-danger { color: var(--danger); background: rgba(251, 113, 133, .16); }
+.pill-info { color: var(--info); background: rgba(125, 211, 252, .16); }
+.pill-muted { color: var(--muted); background: rgba(143, 168, 162, .16); }
+.tone-text-mint { color: var(--mint); }
+.tone-text-warning { color: var(--warning); }
+.tone-text-danger { color: var(--danger); }
+.tone-text-info { color: var(--info); }
+
+/* Command lifecycle notice. The tone class comes from the shared command view so
+   pending, applied and failure read differently instead of sharing one colour. */
+.command-hint { margin-top: 18rpx; padding: 14rpx 20rpx; border-radius: 16rpx; font-size: 22rpx; }
+.command-hint-warning { color: var(--warning); background: rgba(245, 201, 107, .12); }
+.command-hint-mint { color: var(--mint); background: rgba(63, 232, 195, .12); }
+.command-hint-danger { color: var(--danger); background: rgba(251, 113, 133, .12); }
+.command-hint-info { color: var(--info); background: rgba(125, 211, 252, .12); }
