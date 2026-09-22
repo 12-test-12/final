@@ -25,19 +25,17 @@ docker compose -f deploy/compose.yaml ps
 
 ## 3. 启动 Go Backend
 
-先确认 `postgres-dev` 的现有密码，然后在终端中临时设置环境变量：
+先确认 `postgres-dev` 的现有密码，再创建本机配置：
 
 ```sh
 cd backend
-DATABASE_URL='postgres://postgres:<existing-password>@localhost:5432/lab?sslmode=disable' \
-MQTT_BROKER_URL='localhost:1883' \
-MQTT_USERNAME='backend' \
-MQTT_PASSWORD='backend-secret' \
-DEVICE_ALLOWLIST='MCU001' \
-AUTH_MODE='none' \
-BACKEND_ADDR=':8080' \
+cp .env.example .env.local
+# 编辑 .env.local，将 DATABASE_URL 中的 CHANGE_ME 改为 postgres-dev 密码
 go run .
 ```
+
+Backend 启动时直接读取 `.env.local`，不需要再 `export` 每个字段。该文件已被
+Git 忽略，不得提交数据库或 Broker 密码。
 
 `AUTH_MODE=none` 只用于受信任的本地联调网络。成功时日志会出现 `connected to postgres and applied migrations`、`mqtt connected` 和 `http server listening`。
 

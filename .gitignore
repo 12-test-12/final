@@ -21,3 +21,6 @@ hardware/Esp8266/esp8266_config.local.h
 # Test coverage output
 coverage.out
 **/coverage.out
+
+# Backend machine-local configuration and secrets
+backend/.env.local
